@@ -5,7 +5,7 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { refreshChatAvatar } from "./app-chat.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
@@ -312,6 +312,9 @@ export function renderApp(state: AppViewState) {
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+  const activeChatSession = state.sessionsResult?.sessions?.find(
+    (entry) => entry.key === state.sessionKey,
+  );
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -1395,6 +1398,21 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                webchatMode: activeChatSession?.webchatMode === true,
+                onToggleWebchatMode: async () => {
+                  if (!state.client || !state.connected) {
+                    return;
+                  }
+                  try {
+                    await state.client.request("sessions.patch", {
+                      key: state.sessionKey,
+                      webchatMode: !(activeChatSession?.webchatMode === true),
+                    });
+                    await loadSessions(state, { activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES });
+                  } catch (err) {
+                    state.lastError = String(err);
+                  }
+                },
                 onClearHistory: async () => {
                   if (!state.client || !state.connected) {
                     return;

@@ -266,6 +266,15 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("webchatMode" in patch) {
+    const raw = patch.webchatMode;
+    if (raw === null) {
+      delete next.webchatMode;
+    } else if (raw !== undefined) {
+      next.webchatMode = Boolean(raw);
+    }
+  }
+
   if ("verboseLevel" in patch) {
     const raw = patch.verboseLevel;
     const parsed = parseVerboseOverride(raw);

@@ -101,6 +101,8 @@ export type SessionEntry = {
   chatType?: SessionChatType;
   thinkingLevel?: string;
   fastMode?: boolean;
+  /** When true, each prompt starts from a fresh session turn (web-chat style). */
+  webchatMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

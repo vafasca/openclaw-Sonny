@@ -180,6 +180,37 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBeUndefined();
   });
 
+  test("persists webchatMode=true", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, webchatMode: true },
+      }),
+    );
+    expect(entry.webchatMode).toBe(true);
+  });
+
+  test("persists webchatMode=false", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, webchatMode: false },
+      }),
+    );
+    expect(entry.webchatMode).toBe(false);
+  });
+
+  test("clears webchatMode when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { webchatMode: true } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, webchatMode: null },
+      }),
+    );
+    expect(entry.webchatMode).toBeUndefined();
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
