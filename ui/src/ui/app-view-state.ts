@@ -76,6 +76,9 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  chatWebMode: boolean;
+  chatWebProvider: "chatgpt" | "claude";
+  chatWebBrowser: "chrome" | "edge";
   aiLauncherProvider: "chatgpt" | "claude";
   aiLauncherBrowser: "chrome" | "edge";
   chatManualRefreshInFlight: boolean;

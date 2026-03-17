@@ -1421,6 +1421,9 @@ export function renderApp(state: AppViewState) {
                 queue: state.chatQueue,
                 connected: state.connected,
                 canSend: state.connected,
+                webModeEnabled: state.chatWebMode,
+                webProvider: state.chatWebProvider,
+                webBrowser: state.chatWebBrowser,
                 disabledReason: chatDisabledReason,
                 error: state.lastError,
                 sessions: state.sessionsResult,
@@ -1441,6 +1444,17 @@ export function renderApp(state: AppViewState) {
                 onChatScroll: (event) => state.handleChatScroll(event),
                 getDraft: () => state.chatMessage,
                 onDraftChange: (next) => (state.chatMessage = next),
+                onWebModeEnabledChange: (enabled) => {
+                  state.chatWebMode = enabled;
+                },
+                onWebProviderChange: (provider) => {
+                  state.chatWebProvider = provider;
+                  state.aiLauncherProvider = provider;
+                },
+                onWebBrowserChange: (browser) => {
+                  state.chatWebBrowser = browser;
+                  state.aiLauncherBrowser = browser;
+                },
                 onRequestUpdate: requestHostUpdate,
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),

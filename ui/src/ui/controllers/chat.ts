@@ -41,6 +41,9 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatWebMode: boolean;
+  chatWebProvider: "chatgpt" | "claude";
+  chatWebBrowser: "chrome" | "edge";
   lastError: string | null;
 };
 
@@ -215,6 +218,30 @@ export async function sendChatMessage(
     : undefined;
 
   try {
+    if (state.chatWebMode) {
+      const webResult = await state.client.request<{ message?: string }>("chat.web.send", {
+        sessionKey: state.sessionKey,
+        message: msg,
+        provider: state.chatWebProvider,
+        browser: state.chatWebBrowser,
+      });
+      const assistantText = typeof webResult.message === "string" ? webResult.message.trim() : "";
+      if (assistantText) {
+        state.chatMessages = [
+          ...state.chatMessages,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: assistantText }],
+            timestamp: Date.now(),
+          },
+        ];
+      }
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      return runId;
+    }
+
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
