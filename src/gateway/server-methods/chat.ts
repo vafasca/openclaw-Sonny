@@ -270,15 +270,19 @@ function extractRequestedOutputDir(message: string): string | null {
   if (!raw) {
     return null;
   }
-  return raw.replace(/^['"]|['"]$/g, "").trim();
+  return raw
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/[.,;]+$/, "")
+    .trim();
 }
 
 function extractCodeBlockFiles(responseText: string): Array<{ fileName: string; content: string }> {
+  const text = responseText.replace(/\r\n/g, "\n");
   const files: Array<{ fileName: string; content: string }> = [];
-  const regex =
-    /(?:^|\n)(?:✅\s*)?([A-Za-z0-9._-]+\.(?:html|css|js|ts|tsx|json|md|txt))\s*\n```[A-Za-z0-9_-]*\n([\s\S]*?)```/g;
+  const directRegex =
+    /(?:^|\n)(?:✅\s*)?(?:\*\*)?([A-Za-z0-9._/-]+\.(?:html|css|js|jsx|ts|tsx|json|md|txt))(?:\*\*)?\s*\n```[A-Za-z0-9_-]*\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
-  while ((match = regex.exec(responseText))) {
+  while ((match = directRegex.exec(text))) {
     const fileName = match[1]?.trim();
     const content = match[2] ?? "";
     if (!fileName) {
@@ -286,6 +290,48 @@ function extractCodeBlockFiles(responseText: string): Array<{ fileName: string; 
     }
     files.push({ fileName, content: content.replace(/\n$/, "") });
   }
+  if (files.length > 0) {
+    return files;
+  }
+
+  const fallbackByLanguage =
+    /```(html|css|javascript|js|typescript|ts|json|markdown|md)\n([\s\S]*?)```/g;
+  const counters = new Map<string, number>();
+  const nextName = (base: string, ext: string) => {
+    const index = (counters.get(ext) ?? 0) + 1;
+    counters.set(ext, index);
+    return index === 1 ? `${base}.${ext}` : `${base}-${index}.${ext}`;
+  };
+
+  while ((match = fallbackByLanguage.exec(text))) {
+    const lang = (match[1] ?? "").toLowerCase();
+    const content = (match[2] ?? "").replace(/\n$/, "");
+    if (!content.trim()) {
+      continue;
+    }
+    if (lang === "html") {
+      files.push({ fileName: nextName("index", "html"), content });
+      continue;
+    }
+    if (lang === "css") {
+      files.push({ fileName: nextName("styles", "css"), content });
+      continue;
+    }
+    if (lang === "javascript" || lang === "js") {
+      files.push({ fileName: nextName("script", "js"), content });
+      continue;
+    }
+    if (lang === "typescript" || lang === "ts") {
+      files.push({ fileName: nextName("script", "ts"), content });
+      continue;
+    }
+    if (lang === "json") {
+      files.push({ fileName: nextName("data", "json"), content });
+      continue;
+    }
+    files.push({ fileName: nextName("README", "md"), content });
+  }
+
   return files;
 }
 
@@ -1329,7 +1375,13 @@ export const chatHandlers: GatewayRequestHandlers = {
               ]
                 .join("\n")
                 .trim()
-            : (responseText ?? "");
+            : [
+                responseText ?? "",
+                "",
+                "Note: No code blocks were detected for auto-save. Ask the assistant to return fenced code blocks per file.",
+              ]
+                .join("\n")
+                .trim();
         const appended = appendAssistantTranscriptMessage({
           message: finalText,
           sessionId: entry?.sessionId ?? clientRunId,
