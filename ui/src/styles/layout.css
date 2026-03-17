@@ -739,6 +739,53 @@
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
+.sidebar-ai-launcher {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-ai-launcher__title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sidebar-ai-launcher__label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sidebar-ai-launcher__select {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  color: var(--text);
+  font: inherit;
+  padding: 0 10px;
+}
+
+.sidebar-ai-launcher__open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
 .sidebar-version__label {
   font-size: 11px;
   font-weight: 600;

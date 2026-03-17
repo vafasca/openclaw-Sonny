@@ -5,6 +5,7 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { buildExternalAiLaunchUrl, resolveExternalAiUrl } from "./ai-launcher.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -312,6 +313,11 @@ export function renderApp(state: AppViewState) {
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+  const selectedAiUrl = resolveExternalAiUrl(state.aiLauncherProvider);
+  const selectedAiLaunchUrl = buildExternalAiLaunchUrl({
+    provider: state.aiLauncherProvider,
+    browser: state.aiLauncherBrowser,
+  });
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -521,6 +527,54 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="sidebar-shell__footer">
               <div class="sidebar-utility-group">
+                ${
+                  !navCollapsed
+                    ? html`
+                        <div class="sidebar-ai-launcher">
+                          <span class="sidebar-ai-launcher__title">AI Launcher</span>
+                          <label class="sidebar-ai-launcher__label" for="ai-provider">Provider</label>
+                          <select
+                            id="ai-provider"
+                            class="sidebar-ai-launcher__select"
+                            .value=${state.aiLauncherProvider}
+                            @change=${(event: Event) => {
+                              const value = (event.currentTarget as HTMLSelectElement).value;
+                              if (value === "chatgpt" || value === "claude") {
+                                state.aiLauncherProvider = value;
+                              }
+                            }}
+                          >
+                            <option value="chatgpt">ChatGPT</option>
+                            <option value="claude">Claude</option>
+                          </select>
+                          <label class="sidebar-ai-launcher__label" for="ai-browser">Browser</label>
+                          <select
+                            id="ai-browser"
+                            class="sidebar-ai-launcher__select"
+                            .value=${state.aiLauncherBrowser}
+                            @change=${(event: Event) => {
+                              const value = (event.currentTarget as HTMLSelectElement).value;
+                              if (value === "chrome" || value === "edge") {
+                                state.aiLauncherBrowser = value;
+                              }
+                            }}
+                          >
+                            <option value="chrome">Chrome</option>
+                            <option value="edge">Edge</option>
+                          </select>
+                          <a
+                            class="sidebar-ai-launcher__open"
+                            href=${selectedAiLaunchUrl}
+                            target=${EXTERNAL_LINK_TARGET}
+                            rel=${buildExternalLinkRel()}
+                            title=${`Open ${selectedAiUrl} in ${state.aiLauncherBrowser}`}
+                          >
+                            Open selected AI
+                          </a>
+                        </div>
+                      `
+                    : nothing
+                }
                 <a
                   class="nav-item nav-item--external sidebar-utility-link"
                   href="https://docs.openclaw.ai"
