@@ -101,6 +101,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "voicewake.set",
     "node.invoke",
     "chat.send",
+    "chat.web.open",
     "chat.web.send",
     "chat.abort",
     "browser.request",

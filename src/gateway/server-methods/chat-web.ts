@@ -13,6 +13,11 @@ type ChatWebSendParams = {
   timeoutMs?: number;
 };
 
+type ChatWebOpenParams = {
+  provider?: string;
+  browser?: string;
+};
+
 type WebProvider = "chatgpt" | "claude";
 type WebBrowser = "chrome" | "edge";
 
@@ -98,6 +103,67 @@ async function dispatchBrowserRequest(
 }
 
 export const chatWebHandlers: GatewayRequestHandlers = {
+  "chat.web.open": async ({ params, respond }) => {
+    const typed = params as ChatWebOpenParams;
+    const provider = normalizeProvider(typed.provider);
+    const browser = normalizeBrowser(typed.browser);
+
+    const ready = await startBrowserControlServiceFromConfig();
+    if (!ready) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "browser control is disabled; enable browser control/playwright first",
+        ),
+      );
+      return;
+    }
+
+    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
+    const profile = browser;
+    const targetUrl = PROVIDER_URLS[provider];
+
+    const openTab = await dispatchBrowserRequest(dispatcher.dispatch, {
+      method: "POST",
+      path: "/tabs/open",
+      query: { profile },
+      body: { url: targetUrl },
+    });
+    if (openTab.status >= 400) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `failed to open browser tab (${openTab.status})`, {
+          details: openTab.body,
+        }),
+      );
+      return;
+    }
+
+    const tabPayload = (openTab.body ?? {}) as Record<string, unknown>;
+    const targetId = typeof tabPayload.targetId === "string" ? tabPayload.targetId : "";
+    if (!targetId) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser tab targetId missing"));
+      return;
+    }
+
+    await dispatchBrowserRequest(dispatcher.dispatch, {
+      method: "POST",
+      path: "/navigate",
+      query: { profile },
+      body: { targetId, url: targetUrl },
+    });
+
+    respond(true, {
+      provider,
+      browser,
+      targetId,
+      targetUrl,
+      mode: "webchat",
+    });
+  },
   "chat.web.send": async ({ params, respond }) => {
     const typed = params as ChatWebSendParams;
     const message = typeof typed.message === "string" ? typed.message.trim() : "";

@@ -170,6 +170,7 @@ export class OpenClawApp extends LitElement {
   @state() chatWebBrowser: "chrome" | "edge" = "chrome";
   @state() aiLauncherProvider: "chatgpt" | "claude" = "chatgpt";
   @state() aiLauncherBrowser: "chrome" | "edge" = "chrome";
+  @state() aiLauncherStatus: string | null = null;
   @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
@@ -601,6 +602,24 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  async handleAiLauncherOpen() {
+    if (!this.client || !this.connected) {
+      this.aiLauncherStatus = "Connect to the gateway first.";
+      return;
+    }
+    try {
+      this.aiLauncherStatus = `Opening ${this.aiLauncherProvider} in ${this.aiLauncherBrowser}…`;
+      await this.client.request("chat.web.open", {
+        provider: this.aiLauncherProvider,
+        browser: this.aiLauncherBrowser,
+      });
+      this.aiLauncherStatus = "Opened browser session.";
+    } catch (err) {
+      this.aiLauncherStatus = String(err);
+      this.lastError = String(err);
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {

@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildExternalAiLaunchUrl, resolveExternalAiUrl } from "./ai-launcher.ts";
+import {
+  resolveExternalAiBrowserLabel,
+  resolveExternalAiProviderLabel,
+  resolveExternalAiUrl,
+} from "./ai-launcher.ts";
 
 describe("ai launcher helpers", () => {
-  it("resolves the target URL for each provider", () => {
+  it("resolves provider URLs", () => {
     expect(resolveExternalAiUrl("chatgpt")).toBe("https://chatgpt.com/");
     expect(resolveExternalAiUrl("claude")).toBe("https://claude.ai/");
   });
 
-  it("builds browser-specific launch links", () => {
-    expect(buildExternalAiLaunchUrl({ provider: "chatgpt", browser: "edge" })).toBe(
-      "microsoft-edge:https://chatgpt.com/",
-    );
-    expect(buildExternalAiLaunchUrl({ provider: "claude", browser: "chrome" })).toBe(
-      "googlechrome://claude.ai/",
-    );
+  it("resolves friendly labels", () => {
+    expect(resolveExternalAiProviderLabel("chatgpt")).toBe("ChatGPT");
+    expect(resolveExternalAiProviderLabel("claude")).toBe("Claude");
+    expect(resolveExternalAiBrowserLabel("chrome")).toBe("Chrome");
+    expect(resolveExternalAiBrowserLabel("edge")).toBe("Edge");
   });
 });

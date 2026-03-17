@@ -5,7 +5,11 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { buildExternalAiLaunchUrl, resolveExternalAiUrl } from "./ai-launcher.ts";
+import {
+  resolveExternalAiBrowserLabel,
+  resolveExternalAiProviderLabel,
+  resolveExternalAiUrl,
+} from "./ai-launcher.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -314,10 +318,6 @@ export function renderApp(state: AppViewState) {
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const selectedAiUrl = resolveExternalAiUrl(state.aiLauncherProvider);
-  const selectedAiLaunchUrl = buildExternalAiLaunchUrl({
-    provider: state.aiLauncherProvider,
-    browser: state.aiLauncherBrowser,
-  });
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -541,6 +541,7 @@ export function renderApp(state: AppViewState) {
                               const value = (event.currentTarget as HTMLSelectElement).value;
                               if (value === "chatgpt" || value === "claude") {
                                 state.aiLauncherProvider = value;
+                                state.chatWebProvider = value;
                               }
                             }}
                           >
@@ -556,6 +557,7 @@ export function renderApp(state: AppViewState) {
                               const value = (event.currentTarget as HTMLSelectElement).value;
                               if (value === "chrome" || value === "edge") {
                                 state.aiLauncherBrowser = value;
+                                state.chatWebBrowser = value;
                               }
                             }}
                           >
@@ -564,13 +566,34 @@ export function renderApp(state: AppViewState) {
                           </select>
                           <a
                             class="sidebar-ai-launcher__open"
-                            href=${selectedAiLaunchUrl}
-                            target=${EXTERNAL_LINK_TARGET}
-                            rel=${buildExternalLinkRel()}
-                            title=${`Open ${selectedAiUrl} in ${state.aiLauncherBrowser}`}
+                            role="button"
+                            href="#"
+                            @click=${async (event: Event) => {
+                              event.preventDefault();
+                              await state.handleAiLauncherOpen();
+                            }}
+                            title=${`Open ${selectedAiUrl} in ${resolveExternalAiBrowserLabel(state.aiLauncherBrowser)}`}
                           >
-                            Open selected AI
+                            Open selected AI in browser
                           </a>
+                          <label class="sidebar-ai-launcher__toggle" title="Use browser chat flow for prompts">
+                            <input
+                              type="checkbox"
+                              .checked=${state.chatWebMode}
+                              @change=${(event: Event) => {
+                                state.chatWebMode = (
+                                  event.currentTarget as HTMLInputElement
+                                ).checked;
+                              }}
+                            />
+                            <span>Use in chat mode</span>
+                          </label>
+                          <div class="sidebar-ai-launcher__status" aria-live="polite">
+                            ${
+                              state.aiLauncherStatus ??
+                              `Ready: ${resolveExternalAiProviderLabel(state.aiLauncherProvider)} on ${resolveExternalAiBrowserLabel(state.aiLauncherBrowser)}`
+                            }
+                          </div>
                         </div>
                       `
                     : nothing
