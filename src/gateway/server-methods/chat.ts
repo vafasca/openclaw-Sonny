@@ -15,7 +15,6 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -26,10 +25,6 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import {
-  buildAgentMessageFromConversationEntries,
-  type ConversationEntry,
-} from "../agent-prompt.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -68,7 +63,6 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import { sendChatWebMessage } from "./chatweb.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -255,41 +249,6 @@ function stripDisallowedChatControlChars(message: string): string {
   return output;
 }
 
-export function buildChatWebPromptFromMessages(params: {
-  currentMessage: string;
-  messages: unknown[];
-}): string {
-  const entries: ConversationEntry[] = [];
-  for (const message of params.messages) {
-    const raw = stripEnvelopeFromMessage(message);
-    if (!raw || typeof raw !== "object") {
-      continue;
-    }
-    const roleRaw = (raw as { role?: unknown }).role;
-    const role = typeof roleRaw === "string" ? roleRaw.trim().toLowerCase() : "";
-    if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "function") {
-      continue;
-    }
-    const normalizedRole = role === "function" ? "tool" : role;
-    const text = extractTextFromChatContent((raw as { content?: unknown }).content)?.trim() ?? "";
-    if (!text) {
-      continue;
-    }
-    const sender =
-      normalizedRole === "assistant" ? "Assistant" : normalizedRole === "user" ? "User" : "Tool";
-    entries.push({
-      role: normalizedRole,
-      entry: { sender, body: text },
-    });
-  }
-  entries.push({
-    role: "user",
-    entry: { sender: "User", body: params.currentMessage },
-  });
-  const prompt = buildAgentMessageFromConversationEntries(entries).trim();
-  return prompt || params.currentMessage;
-}
-
 export function sanitizeChatSendMessageInput(
   message: string,
 ): { ok: true; message: string } | { ok: false; error: string } {
@@ -298,110 +257,6 @@ export function sanitizeChatSendMessageInput(
     return { ok: false, error: "message must not contain null bytes" };
   }
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
-}
-
-type ChatWebSavedFile = { fileName: string; fullPath: string };
-
-function extractRequestedOutputDir(message: string): string | null {
-  const match = message.match(
-    /(?:guarda(?:rlo)?|guardar|save).*?(?:carpeta|folder|path)\s*[:：]?\s*([^\n\r]+)/i,
-  );
-  const raw = match?.[1]?.trim();
-  if (!raw) {
-    return null;
-  }
-  return raw
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/[.,;]+$/, "")
-    .trim();
-}
-
-function extractCodeBlockFiles(responseText: string): Array<{ fileName: string; content: string }> {
-  const text = responseText.replace(/\r\n/g, "\n");
-  const files: Array<{ fileName: string; content: string }> = [];
-  const directRegex =
-    /(?:^|\n)(?:✅\s*)?(?:\*\*)?([A-Za-z0-9._/-]+\.(?:html|css|js|jsx|ts|tsx|json|md|txt))(?:\*\*)?\s*\n```[A-Za-z0-9_-]*\n([\s\S]*?)```/g;
-  let match: RegExpExecArray | null;
-  while ((match = directRegex.exec(text))) {
-    const fileName = match[1]?.trim();
-    const content = match[2] ?? "";
-    if (!fileName) {
-      continue;
-    }
-    files.push({ fileName, content: content.replace(/\n$/, "") });
-  }
-  if (files.length > 0) {
-    return files;
-  }
-
-  const fallbackByLanguage =
-    /```(html|css|javascript|js|typescript|ts|json|markdown|md)\n([\s\S]*?)```/g;
-  const counters = new Map<string, number>();
-  const nextName = (base: string, ext: string) => {
-    const index = (counters.get(ext) ?? 0) + 1;
-    counters.set(ext, index);
-    return index === 1 ? `${base}.${ext}` : `${base}-${index}.${ext}`;
-  };
-
-  while ((match = fallbackByLanguage.exec(text))) {
-    const lang = (match[1] ?? "").toLowerCase();
-    const content = (match[2] ?? "").replace(/\n$/, "");
-    if (!content.trim()) {
-      continue;
-    }
-    if (lang === "html") {
-      files.push({ fileName: nextName("index", "html"), content });
-      continue;
-    }
-    if (lang === "css") {
-      files.push({ fileName: nextName("styles", "css"), content });
-      continue;
-    }
-    if (lang === "javascript" || lang === "js") {
-      files.push({ fileName: nextName("script", "js"), content });
-      continue;
-    }
-    if (lang === "typescript" || lang === "ts") {
-      files.push({ fileName: nextName("script", "ts"), content });
-      continue;
-    }
-    if (lang === "json") {
-      files.push({ fileName: nextName("data", "json"), content });
-      continue;
-    }
-    files.push({ fileName: nextName("README", "md"), content });
-  }
-
-  return files;
-}
-
-function maybePersistChatWebFiles(params: {
-  userMessage: string;
-  responseText: string;
-  log: GatewayRequestContext["logGateway"];
-}): ChatWebSavedFile[] {
-  const outputDir = extractRequestedOutputDir(params.userMessage);
-  if (!outputDir) {
-    return [];
-  }
-  const files = extractCodeBlockFiles(params.responseText);
-  if (files.length === 0) {
-    return [];
-  }
-
-  try {
-    fs.mkdirSync(outputDir, { recursive: true });
-    const saved: ChatWebSavedFile[] = [];
-    for (const file of files) {
-      const fullPath = path.join(outputDir, file.fileName);
-      fs.writeFileSync(fullPath, file.content, "utf8");
-      saved.push({ fileName: file.fileName, fullPath });
-    }
-    return saved;
-  } catch (error) {
-    params.log.warn(`chatweb file persistence failed: ${formatForLog(error)}`);
-    return [];
-  }
 }
 
 function normalizeOptionalChatSystemReceipt(
@@ -1331,7 +1186,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1386,102 +1241,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
-      return;
-    }
-
-    if (cfg.chatweb?.enabled === true) {
-      respond(true, { runId: clientRunId, status: "started" as const }, undefined, {
-        runId: clientRunId,
-      });
-      try {
-        const priorMessages =
-          entry?.sessionId && storePath
-            ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile)
-            : [];
-        const assistantPrompt = buildChatWebPromptFromMessages({
-          currentMessage: parsedMessage,
-          messages: priorMessages,
-        });
-        const responseText = await sendChatWebMessage({
-          conversationId: sessionKey,
-          message: assistantPrompt,
-          aiAssistant: cfg.chatweb.aiAssistant ?? "chatgpt",
-          browserType: cfg.chatweb.browser ?? "chrome",
-        });
-        const savedFiles = maybePersistChatWebFiles({
-          userMessage: parsedMessage,
-          responseText: responseText ?? "",
-          log: context.logGateway,
-        });
-        const finalText =
-          savedFiles.length > 0
-            ? [
-                responseText ?? "",
-                "",
-                "Saved files:",
-                ...savedFiles.map((entry) => `- ${entry.fullPath}`),
-              ]
-                .join("\n")
-                .trim()
-            : [
-                responseText ?? "",
-                "",
-                "Note: No code blocks were detected for auto-save. Ask the assistant to return fenced code blocks per file.",
-              ]
-                .join("\n")
-                .trim();
-        const appended = appendAssistantTranscriptMessage({
-          message: finalText,
-          sessionId: entry?.sessionId ?? clientRunId,
-          storePath,
-          sessionFile: entry?.sessionFile,
-          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-          createIfMissing: true,
-        });
-        broadcastChatFinal({
-          context,
-          runId: clientRunId,
-          sessionKey: rawSessionKey,
-          message: appended.ok
-            ? appended.message
-            : {
-                role: "assistant",
-                content: [{ type: "text", text: finalText }],
-                timestamp: Date.now(),
-              },
-        });
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${clientRunId}`,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload: { runId: clientRunId, status: "ok" as const },
-          },
-        });
-      } catch (err) {
-        const errorText = String(err);
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${clientRunId}`,
-          entry: {
-            ts: Date.now(),
-            ok: false,
-            payload: {
-              runId: clientRunId,
-              status: "error" as const,
-              summary: errorText,
-            },
-            error: errorShape(ErrorCodes.UNAVAILABLE, errorText),
-          },
-        });
-        broadcastChatError({
-          context,
-          runId: clientRunId,
-          sessionKey: rawSessionKey,
-          errorMessage: errorText,
-        });
-      }
       return;
     }
 
