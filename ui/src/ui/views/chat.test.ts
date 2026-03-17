@@ -795,6 +795,21 @@ describe("chat view", () => {
     expect(optionValues).not.toContain("gpt-5-mini");
   });
 
+  it("opens ChatGPT when clicking the chatweb header button", () => {
+    const { state } = createChatHeaderState();
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const chatwebButton = container.querySelector<HTMLButtonElement>(".chat-controls__chatweb");
+    expect(chatwebButton).not.toBeNull();
+
+    chatwebButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(openSpy).toHaveBeenCalledWith("https://chatgpt.com/", "_blank", "noopener,noreferrer");
+    openSpy.mockRestore();
+  });
+
   it("prefers the session label over displayName in the grouped chat session selector", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
