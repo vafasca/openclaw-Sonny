@@ -784,6 +784,7 @@
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .sidebar-ai-launcher__toggle {

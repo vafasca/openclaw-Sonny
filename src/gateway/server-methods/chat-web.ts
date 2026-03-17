@@ -1,8 +1,8 @@
-import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "../../browser/control-service.js";
-import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
+import { mkdir, access } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { Browser, BrowserContext, Page } from "playwright-core";
+import { chromium } from "playwright-core";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -11,19 +11,25 @@ type ChatWebSendParams = {
   provider?: string;
   browser?: string;
   timeoutMs?: number;
+  sessionKey?: string;
 };
 
 type ChatWebOpenParams = {
   provider?: string;
   browser?: string;
+  sessionKey?: string;
 };
 
 type WebProvider = "chatgpt" | "claude";
 type WebBrowser = "chrome" | "edge";
 
-type DispatchResponse = Awaited<
-  ReturnType<ReturnType<typeof createBrowserRouteDispatcher>["dispatch"]>
->;
+type ActiveBrowserSession = {
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+  provider: WebProvider;
+  browserType: WebBrowser;
+};
 
 const MAX_TIMEOUT_MS = 120_000;
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -36,8 +42,18 @@ const PROVIDER_URLS: Record<WebProvider, string> = {
 
 const INPUT_SELECTORS: Record<WebProvider, string[]> = {
   chatgpt: ["#prompt-textarea", "textarea[placeholder*='Message']", "textarea"],
-  claude: ["div[contenteditable='true']", "textarea[placeholder*='Message']", "textarea"],
+  claude: ["div[contenteditable='true']", "textarea", "div.ProseMirror"],
 };
+
+const ASSISTANT_SELECTORS: Record<WebProvider, string[]> = {
+  chatgpt: [
+    "[data-message-author-role='assistant']",
+    "[data-testid='conversation-turn'] [data-message-author-role='assistant']",
+  ],
+  claude: ["[data-testid='conversation-turn']", "main [class*='prose']", "main article"],
+};
+
+const activeSessions = new Map<string, ActiveBrowserSession>();
 
 function normalizeProvider(value: unknown): WebProvider {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -55,51 +71,161 @@ function normalizeTimeout(value: unknown): number {
   return Math.min(MAX_TIMEOUT_MS, Math.max(10_000, parsed));
 }
 
-function snapshotText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return "";
-  }
-  const rec = payload as Record<string, unknown>;
-  return typeof rec.snapshot === "string" ? rec.snapshot.trim() : "";
+function resolveConversationKey(params: {
+  sessionKey?: string;
+  provider: WebProvider;
+  browser: WebBrowser;
+}) {
+  const sessionKey =
+    typeof params.sessionKey === "string" && params.sessionKey.trim()
+      ? params.sessionKey.trim()
+      : "default";
+  return `${sessionKey}:${params.provider}:${params.browser}`;
 }
 
-function extractLikelyAssistantText(snapshot: string, prompt: string): string {
-  const lines = snapshot
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length === 0) {
-    return "";
+function isSessionAlive(
+  session: ActiveBrowserSession | undefined,
+): session is ActiveBrowserSession {
+  if (!session) {
+    return false;
   }
-  const normalizedPrompt = prompt.trim().toLowerCase();
-  const promptIndex = normalizedPrompt
-    ? lines.findLastIndex((line) => line.toLowerCase().includes(normalizedPrompt.slice(0, 80)))
-    : -1;
-  const candidate = promptIndex >= 0 ? lines.slice(promptIndex + 1) : lines;
-  const compact = candidate
-    .filter((line) => !line.toLowerCase().startsWith("new chat"))
-    .filter((line) => !line.toLowerCase().startsWith("search"))
-    .slice(-36)
-    .join("\n")
-    .trim();
-  return compact;
+  if (!session.browser.isConnected()) {
+    return false;
+  }
+  try {
+    void session.page.url();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-async function dispatchBrowserRequest(
-  dispatch: ReturnType<typeof createBrowserRouteDispatcher>["dispatch"],
-  params: {
-    method: "GET" | "POST" | "DELETE";
-    path: string;
-    query?: Record<string, unknown>;
-    body?: unknown;
-  },
-): Promise<DispatchResponse> {
-  return await dispatch({
-    method: params.method,
-    path: params.path,
-    query: params.query,
-    body: params.body,
+async function cleanupSession(conversationKey: string) {
+  const existing = activeSessions.get(conversationKey);
+  if (!existing) {
+    return;
+  }
+  activeSessions.delete(conversationKey);
+  try {
+    await existing.browser.close();
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+function resolveStoragePath(provider: WebProvider, browser: WebBrowser): string {
+  return path.join(
+    os.homedir(),
+    ".openclaw",
+    "browser-data",
+    provider,
+    `${browser}-storage-state.json`,
+  );
+}
+
+async function readStoragePathIfExists(storagePath: string): Promise<string | undefined> {
+  try {
+    await access(storagePath);
+    return storagePath;
+  } catch {
+    return undefined;
+  }
+}
+
+async function openBrowserSession(args: {
+  conversationKey: string;
+  provider: WebProvider;
+  browser: WebBrowser;
+}): Promise<ActiveBrowserSession> {
+  const storagePath = resolveStoragePath(args.provider, args.browser);
+  await mkdir(path.dirname(storagePath), { recursive: true });
+
+  const channel = args.browser === "edge" ? "msedge" : "chrome";
+  const browser = await chromium.launch({
+    channel,
+    headless: false,
+    args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
   });
+  const context = await browser.newContext({
+    viewport: null,
+    storageState: await readStoragePathIfExists(storagePath),
+  });
+  const page = await context.newPage();
+
+  await page.goto(PROVIDER_URLS[args.provider], { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => undefined);
+  await page.waitForTimeout(1_000);
+
+  const session: ActiveBrowserSession = {
+    browser,
+    context,
+    page,
+    provider: args.provider,
+    browserType: args.browser,
+  };
+  activeSessions.set(args.conversationKey, session);
+  browser.on("disconnected", () => {
+    const current = activeSessions.get(args.conversationKey);
+    if (current === session) {
+      activeSessions.delete(args.conversationKey);
+    }
+  });
+  return session;
+}
+
+async function getOrOpenSession(args: {
+  conversationKey: string;
+  provider: WebProvider;
+  browser: WebBrowser;
+}): Promise<{ session: ActiveBrowserSession; alreadyOpen: boolean }> {
+  const existing = activeSessions.get(args.conversationKey);
+  if (isSessionAlive(existing)) {
+    return { session: existing, alreadyOpen: true };
+  }
+  await cleanupSession(args.conversationKey);
+  const session = await openBrowserSession(args);
+  return { session, alreadyOpen: false };
+}
+
+async function findInputSelector(page: Page, provider: WebProvider): Promise<string | null> {
+  for (const selector of INPUT_SELECTORS[provider]) {
+    try {
+      await page.waitForSelector(selector, { timeout: 8_000 });
+      return selector;
+    } catch {
+      // Try next selector.
+    }
+  }
+  return null;
+}
+
+async function getLatestAssistantText(page: Page, provider: WebProvider): Promise<string> {
+  for (const selector of ASSISTANT_SELECTORS[provider]) {
+    try {
+      const texts = await page.$$eval(selector, (nodes) =>
+        nodes.map((node) => node.textContent?.trim() ?? "").filter(Boolean),
+      );
+      if (texts.length > 0) {
+        return texts[texts.length - 1] ?? "";
+      }
+    } catch {
+      // Try next selector.
+    }
+  }
+  return "";
+}
+
+async function saveSessionStorage(session: ActiveBrowserSession) {
+  const storagePath = resolveStoragePath(session.provider, session.browserType);
+  await mkdir(path.dirname(storagePath), { recursive: true });
+  await session.context.storageState({ path: storagePath });
+}
+
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return String(err);
 }
 
 export const chatWebHandlers: GatewayRequestHandlers = {
@@ -107,62 +233,36 @@ export const chatWebHandlers: GatewayRequestHandlers = {
     const typed = params as ChatWebOpenParams;
     const provider = normalizeProvider(typed.provider);
     const browser = normalizeBrowser(typed.browser);
+    const conversationKey = resolveConversationKey({
+      sessionKey: typed.sessionKey,
+      provider,
+      browser,
+    });
 
-    const ready = await startBrowserControlServiceFromConfig();
-    if (!ready) {
+    try {
+      const { session, alreadyOpen } = await getOrOpenSession({
+        conversationKey,
+        provider,
+        browser,
+      });
+      await session.page.bringToFront();
+      respond(true, {
+        provider,
+        browser,
+        mode: "webchat",
+        alreadyOpen,
+        targetUrl: session.page.url(),
+      });
+    } catch (err) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.UNAVAILABLE,
-          "browser control is disabled; enable browser control/playwright first",
+          `failed to open ${browser} for ${provider}: ${extractErrorMessage(err)}`,
         ),
       );
-      return;
     }
-
-    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
-    const profile = browser;
-    const targetUrl = PROVIDER_URLS[provider];
-
-    const openTab = await dispatchBrowserRequest(dispatcher.dispatch, {
-      method: "POST",
-      path: "/tabs/open",
-      query: { profile },
-      body: { url: targetUrl },
-    });
-    if (openTab.status >= 400) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `failed to open browser tab (${openTab.status})`, {
-          details: openTab.body,
-        }),
-      );
-      return;
-    }
-
-    const tabPayload = (openTab.body ?? {}) as Record<string, unknown>;
-    const targetId = typeof tabPayload.targetId === "string" ? tabPayload.targetId : "";
-    if (!targetId) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser tab targetId missing"));
-      return;
-    }
-
-    await dispatchBrowserRequest(dispatcher.dispatch, {
-      method: "POST",
-      path: "/navigate",
-      query: { profile },
-      body: { targetId, url: targetUrl },
-    });
-
-    respond(true, {
-      provider,
-      browser,
-      targetId,
-      targetUrl,
-      mode: "webchat",
-    });
   },
   "chat.web.send": async ({ params, respond }) => {
     const typed = params as ChatWebSendParams;
@@ -175,136 +275,75 @@ export const chatWebHandlers: GatewayRequestHandlers = {
     const provider = normalizeProvider(typed.provider);
     const browser = normalizeBrowser(typed.browser);
     const timeoutMs = normalizeTimeout(typed.timeoutMs);
-    const profile = browser;
-
-    const ready = await startBrowserControlServiceFromConfig();
-    if (!ready) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "browser control is disabled; enable browser control/playwright first",
-        ),
-      );
-      return;
-    }
-
-    const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
-
-    const openTab = await dispatchBrowserRequest(dispatcher.dispatch, {
-      method: "POST",
-      path: "/tabs/open",
-      query: { profile },
-      body: { url: PROVIDER_URLS[provider] },
-    });
-    if (openTab.status >= 400) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `failed to open browser tab (${openTab.status})`, {
-          details: openTab.body,
-        }),
-      );
-      return;
-    }
-
-    const tabPayload = (openTab.body ?? {}) as Record<string, unknown>;
-    const targetId = typeof tabPayload.targetId === "string" ? tabPayload.targetId : "";
-    if (!targetId) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "browser tab targetId missing"));
-      return;
-    }
-
-    await dispatchBrowserRequest(dispatcher.dispatch, {
-      method: "POST",
-      path: "/navigate",
-      query: { profile },
-      body: { targetId, url: PROVIDER_URLS[provider] },
-    });
-
-    let submitted = false;
-    let submitError: unknown = null;
-    for (const selector of INPUT_SELECTORS[provider]) {
-      const typeResult = await dispatchBrowserRequest(dispatcher.dispatch, {
-        method: "POST",
-        path: "/act",
-        query: { profile },
-        body: {
-          kind: "type",
-          targetId,
-          selector,
-          text: message,
-          submit: true,
-          timeoutMs: 20_000,
-        },
-      });
-      if (typeResult.status < 400) {
-        submitted = true;
-        break;
-      }
-      submitError = typeResult.body;
-    }
-
-    if (!submitted) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "unable to find a message input on the web AI page; make sure you're logged in",
-          { details: submitError },
-        ),
-      );
-      return;
-    }
-
-    const startedAt = Date.now();
-    let latestSnapshot = "";
-    let finalMessage = "";
-    while (Date.now() - startedAt < timeoutMs) {
-      const snap = await dispatchBrowserRequest(dispatcher.dispatch, {
-        method: "GET",
-        path: "/snapshot",
-        query: {
-          profile,
-          targetId,
-          format: "ai",
-          maxChars: 14_000,
-          compact: true,
-          interactive: false,
-        },
-      });
-      if (snap.status < 400) {
-        latestSnapshot = snapshotText(snap.body);
-        const extracted = extractLikelyAssistantText(latestSnapshot, message);
-        if (extracted.length > 64 && !extracted.toLowerCase().includes(message.toLowerCase())) {
-          finalMessage = extracted;
-          break;
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    }
-
-    const responseText = finalMessage || extractLikelyAssistantText(latestSnapshot, message);
-    if (!responseText) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "web AI response timed out or could not be captured; try again after opening/logging in",
-        ),
-      );
-      return;
-    }
-
-    respond(true, {
+    const conversationKey = resolveConversationKey({
+      sessionKey: typed.sessionKey,
       provider,
       browser,
-      mode: "webchat",
-      message: responseText,
-      targetUrl: PROVIDER_URLS[provider],
     });
+
+    try {
+      const { session } = await getOrOpenSession({ conversationKey, provider, browser });
+      const { page } = session;
+      await page.bringToFront();
+
+      const inputSelector = await findInputSelector(page, provider);
+      if (!inputSelector) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "unable to find a message input on the web AI page; make sure you're logged in",
+          ),
+        );
+        return;
+      }
+
+      const previousAssistantText = await getLatestAssistantText(page, provider);
+      await page.click(inputSelector, { timeout: 10_000 });
+      await page.fill(inputSelector, message, { timeout: 10_000 });
+      await page.keyboard.press("Enter");
+
+      const startedAt = Date.now();
+      let latestAssistantText = "";
+      while (Date.now() - startedAt < timeoutMs) {
+        latestAssistantText = await getLatestAssistantText(page, provider);
+        if (latestAssistantText && latestAssistantText !== previousAssistantText) {
+          break;
+        }
+        await page.waitForTimeout(POLL_INTERVAL_MS);
+      }
+
+      await saveSessionStorage(session);
+
+      if (!latestAssistantText || latestAssistantText === previousAssistantText) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            "web AI response timed out or could not be captured; try again after opening/logging in",
+          ),
+        );
+        return;
+      }
+
+      respond(true, {
+        provider,
+        browser,
+        mode: "webchat",
+        message: latestAssistantText,
+        targetUrl: page.url(),
+      });
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `failed to send via ${browser}/${provider}: ${extractErrorMessage(err)}`,
+        ),
+      );
+    }
   },
 };

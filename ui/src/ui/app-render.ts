@@ -564,18 +564,16 @@ export function renderApp(state: AppViewState) {
                             <option value="chrome">Chrome</option>
                             <option value="edge">Edge</option>
                           </select>
-                          <a
+                          <button
+                            type="button"
                             class="sidebar-ai-launcher__open"
-                            role="button"
-                            href="#"
-                            @click=${async (event: Event) => {
-                              event.preventDefault();
+                            @click=${async () => {
                               await state.handleAiLauncherOpen();
                             }}
                             title=${`Open ${selectedAiUrl} in ${resolveExternalAiBrowserLabel(state.aiLauncherBrowser)}`}
                           >
                             Open selected AI in browser
-                          </a>
+                          </button>
                           <label class="sidebar-ai-launcher__toggle" title="Use browser chat flow for prompts">
                             <input
                               type="checkbox"

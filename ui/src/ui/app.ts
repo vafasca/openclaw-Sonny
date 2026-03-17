@@ -614,11 +614,26 @@ export class OpenClawApp extends LitElement {
       await this.client.request("chat.web.open", {
         provider: this.aiLauncherProvider,
         browser: this.aiLauncherBrowser,
+        sessionKey: this.sessionKey,
       });
+      this.chatWebMode = true;
       this.aiLauncherStatus = "Opened browser session.";
     } catch (err) {
-      this.aiLauncherStatus = String(err);
-      this.lastError = String(err);
+      let message = "Unknown error";
+      if (err instanceof Error) {
+        message = err.message;
+      } else if (typeof err === "string") {
+        message = err;
+      } else if (typeof err === "object" && err && "message" in err) {
+        const maybeMessage = (err as { message?: unknown }).message;
+        if (typeof maybeMessage === "string" && maybeMessage.trim()) {
+          message = maybeMessage;
+        } else {
+          message = JSON.stringify(err);
+        }
+      }
+      this.aiLauncherStatus = message;
+      this.lastError = message;
     }
   }
 
