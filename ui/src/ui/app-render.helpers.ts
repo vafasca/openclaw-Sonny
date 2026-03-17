@@ -17,6 +17,7 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { openExternalUrlSafe } from "./open-external-url.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";
@@ -168,6 +169,16 @@ export function renderChatSessionSelect(state: AppViewState) {
         </select>
       </label>
       ${modelSelect}
+      <button
+        class="btn btn--sm chat-controls__chatweb"
+        type="button"
+        title="Abrir ChatGPT en el navegador"
+        @click=${() => {
+          openExternalUrlSafe("https://chatgpt.com/");
+        }}
+      >
+        chatweb
+      </button>
     </div>
   `;
 }
