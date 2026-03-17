@@ -172,39 +172,78 @@ function renderWebchatModeControls(state: AppViewState) {
 
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const activeSession = state.sessionsResult?.sessions?.find(
+    (entry) => entry.key === state.sessionKey,
+  );
+  const webchatEnabled = activeSession?.webchatMode === true;
+  const webchatBrowser = activeSession?.webchatBrowser ?? "chrome";
   const modelSelect = renderChatModelSelect(state);
   return html`
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
-        <select
-          .value=${state.sessionKey}
-          ?disabled=${!state.connected || sessionGroups.length === 0}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
-            if (state.sessionKey === next) {
-              return;
-            }
-            switchChatSession(state, next);
-          }}
-        >
-          ${repeat(
-            sessionGroups,
-            (group) => group.id,
-            (group) =>
-              html`<optgroup label=${group.label}>
+        ${
+          webchatEnabled
+            ? html`<select
+                .value=${"mode-chatgpt"}
+                ?disabled=${!state.connected}
+                aria-label="Chat mode"
+                @change=${async (e: Event) => {
+                  const next = (e.target as HTMLSelectElement).value;
+                  await patchSession(state, state.sessionKey, {
+                    webchatMode: next === "mode-chatgpt",
+                  });
+                }}
+              >
+                <option value="mode-chatgpt">mode chatgpt</option>
+                <option value="mode-model">mode model</option>
+              </select>`
+            : html`<select
+                .value=${state.sessionKey}
+                ?disabled=${!state.connected || sessionGroups.length === 0}
+                @change=${(e: Event) => {
+                  const next = (e.target as HTMLSelectElement).value;
+                  if (state.sessionKey === next) {
+                    return;
+                  }
+                  switchChatSession(state, next);
+                }}
+              >
                 ${repeat(
-                  group.options,
-                  (entry) => entry.key,
-                  (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>
-                      ${entry.label}
-                    </option>`,
+                  sessionGroups,
+                  (group) => group.id,
+                  (group) =>
+                    html`<optgroup label=${group.label}>
+                      ${repeat(
+                        group.options,
+                        (entry) => entry.key,
+                        (entry) =>
+                          html`<option value=${entry.key} title=${entry.title}>
+                            ${entry.label}
+                          </option>`,
+                      )}
+                    </optgroup>`,
                 )}
-              </optgroup>`,
-          )}
-        </select>
+              </select>`
+        }
       </label>
-      ${modelSelect}
+      ${
+        webchatEnabled
+          ? html`<label class="field chat-controls__session chat-controls__model">
+              <select
+                .value=${webchatBrowser}
+                ?disabled=${!state.connected}
+                aria-label="Webchat browser"
+                @change=${async (e: Event) => {
+                  const next = (e.target as HTMLSelectElement).value as "chrome" | "edge";
+                  await patchSession(state, state.sessionKey, { webchatBrowser: next });
+                }}
+              >
+                <option value="chrome">chrome</option>
+                <option value="edge">edge</option>
+              </select>
+            </label>`
+          : modelSelect
+      }
       ${renderWebchatModeControls(state)}
     </div>
   `;
