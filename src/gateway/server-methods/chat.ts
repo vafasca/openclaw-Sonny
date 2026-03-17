@@ -1262,10 +1262,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
       const trimmedMessage = parsedMessage.trim();
+      const webchatMode = entry?.webchatMode === true;
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBodyBase = injectThinking
+        ? `/think ${p.thinking} ${parsedMessage}`
+        : parsedMessage;
+      const commandBody =
+        webchatMode && trimmedMessage && !trimmedMessage.startsWith("/")
+          ? `/new ${commandBodyBase}`
+          : commandBodyBase;
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;

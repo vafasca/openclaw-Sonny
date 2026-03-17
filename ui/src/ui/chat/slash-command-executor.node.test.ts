@@ -448,4 +448,41 @@ describe("executeSlashCommand directives", () => {
       fastMode: true,
     });
   });
+  it("reports the current web chat mode for bare /webchat", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [row("agent:main:main", { webchatMode: true })],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "webchat",
+      "",
+    );
+
+    expect(result.content).toBe("Current web chat mode: on.\nOptions: status, on, off.");
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("patches web chat mode for /webchat on", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "webchat",
+      "on",
+    );
+
+    expect(result.content).toContain("Web chat mode enabled");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      webchatMode: true,
+    });
+  });
 });

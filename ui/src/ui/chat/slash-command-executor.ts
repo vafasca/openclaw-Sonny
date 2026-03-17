@@ -73,6 +73,8 @@ export async function executeSlashCommand(
       return await executeThink(client, sessionKey, args);
     case "fast":
       return await executeFast(client, sessionKey, args);
+    case "webchat":
+      return await executeWebchat(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
     case "export":
@@ -287,6 +289,48 @@ async function executeFast(
     };
   } catch (err) {
     return { content: `Failed to set fast mode: ${String(err)}` };
+  }
+}
+
+async function executeWebchat(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+): Promise<SlashCommandResult> {
+  const rawMode = args.trim().toLowerCase();
+
+  if (!rawMode || rawMode === "status") {
+    try {
+      const session = await loadCurrentSession(client, sessionKey);
+      const enabled = session?.webchatMode === true;
+      return {
+        content: formatDirectiveOptions(
+          `Current web chat mode: ${enabled ? "on" : "off"}.`,
+          "status, on, off",
+        ),
+      };
+    } catch (err) {
+      return { content: `Failed to get web chat mode: ${String(err)}` };
+    }
+  }
+
+  if (rawMode !== "on" && rawMode !== "off") {
+    return {
+      content: `Unrecognized web chat mode "${args.trim()}". Valid levels: status, on, off.`,
+    };
+  }
+
+  try {
+    await client.request("sessions.patch", { key: sessionKey, webchatMode: rawMode === "on" });
+    return {
+      content:
+        rawMode === "on"
+          ? "Web chat mode enabled. Each prompt will start in a fresh conversation when supported by the active provider."
+          : "Web chat mode disabled.",
+      action: "refresh",
+    };
+  } catch (err) {
+    return { content: `Failed to set web chat mode: ${String(err)}` };
   }
 }
 

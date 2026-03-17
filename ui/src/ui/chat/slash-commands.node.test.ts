@@ -31,6 +31,13 @@ describe("parseSlashCommand", () => {
     });
   });
 
+  it("parses webchat commands", () => {
+    expect(parseSlashCommand("/webchat:on")).toMatchObject({
+      command: { name: "webchat" },
+      args: "on",
+    });
+  });
+
   it("keeps /status on the agent path", () => {
     const status = SLASH_COMMANDS.find((entry) => entry.name === "status");
     expect(status?.executeLocal).not.toBe(true);

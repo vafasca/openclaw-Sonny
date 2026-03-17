@@ -64,6 +64,8 @@ export async function patchSession(
     label?: string | null;
     thinkingLevel?: string | null;
     fastMode?: boolean | null;
+    webchatMode?: boolean | null;
+    webchatBrowser?: "chrome" | "edge" | null;
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
@@ -80,6 +82,12 @@ export async function patchSession(
   }
   if ("fastMode" in patch) {
     params.fastMode = patch.fastMode;
+  }
+  if ("webchatMode" in patch) {
+    params.webchatMode = patch.webchatMode;
+  }
+  if ("webchatBrowser" in patch) {
+    params.webchatBrowser = patch.webchatBrowser;
   }
   if ("verboseLevel" in patch) {
     params.verboseLevel = patch.verboseLevel;

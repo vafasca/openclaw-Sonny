@@ -64,6 +64,14 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
+function normalizeWebchatBrowser(raw: string): "chrome" | "edge" | undefined {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "chrome" || normalized === "edge") {
+    return normalized;
+  }
+  return undefined;
+}
+
 function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
@@ -263,6 +271,33 @@ export async function applySessionsPatchToStore(params: {
         return invalid("invalid fastMode (use true or false)");
       }
       next.fastMode = normalized;
+    }
+  }
+
+  if ("webchatMode" in patch) {
+    const raw = patch.webchatMode;
+    if (raw === null) {
+      delete next.webchatMode;
+      delete next.webchatBrowser;
+    } else if (raw !== undefined) {
+      next.webchatMode = Boolean(raw);
+      if (!next.webchatMode) {
+        delete next.webchatBrowser;
+      }
+    }
+  }
+
+  if ("webchatBrowser" in patch) {
+    const raw = patch.webchatBrowser;
+    if (raw === null) {
+      delete next.webchatBrowser;
+    } else if (raw !== undefined) {
+      const normalized = normalizeWebchatBrowser(String(raw));
+      if (!normalized) {
+        return invalid('invalid webchatBrowser (use "chrome" or "edge")');
+      }
+      next.webchatBrowser = normalized;
+      next.webchatMode = true;
     }
   }
 

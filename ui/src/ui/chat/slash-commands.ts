@@ -98,6 +98,16 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     argOptions: ["status", "on", "off"],
   },
 
+  {
+    name: "webchat",
+    description: "Toggle web chat mode (new conversation each prompt)",
+    args: "<status|on|off>",
+    icon: "monitor",
+    category: "model",
+    executeLocal: true,
+    argOptions: ["status", "on", "off"],
+  },
+
   // ── Tools ──
   {
     name: "help",

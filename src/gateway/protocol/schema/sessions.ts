@@ -53,6 +53,10 @@ export const SessionsPatchParamsSchema = Type.Object(
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    webchatMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    webchatBrowser: Type.Optional(
+      Type.Union([Type.Literal("chrome"), Type.Literal("edge"), Type.Null()]),
+    ),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     responseUsage: Type.Optional(

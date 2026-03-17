@@ -95,6 +95,8 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  webchatMode?: boolean;
+  onToggleWebchatMode?: () => void;
   onClearHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
@@ -1280,6 +1282,20 @@ export function renderChat(props: ChatProps) {
 
           <div class="agent-chat__toolbar-right">
             ${nothing /* search hidden for now */}
+            ${
+              props.onToggleWebchatMode
+                ? html`
+                    <button
+                      class="btn-ghost"
+                      @click=${props.onToggleWebchatMode}
+                      title=${props.webchatMode ? "Disable web chat mode" : "Enable web chat mode"}
+                      aria-label="Toggle web chat mode"
+                    >
+                      ${icons.monitor}
+                    </button>
+                  `
+                : nothing
+            }
             ${
               canAbort
                 ? nothing
