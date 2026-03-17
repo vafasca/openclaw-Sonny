@@ -231,24 +231,29 @@ function wrapStreamFnModelIoDebug(params: {
       },
     };
     const run = params.baseFn(model, context, wrappedOptions);
-    if (!run || typeof run !== "object") {
-      return run;
-    }
-    const maybeResult = (run as { result?: unknown }).result;
-    if (typeof maybeResult !== "function") {
-      return run;
-    }
-    const wrappedRun = run as { result: () => Promise<unknown> };
-    return {
-      ...(run as Record<string, unknown>),
-      result: async () => {
-        const result = await wrappedRun.result();
+    const wrapResultLogger = (value: unknown) => {
+      if (!value || typeof value !== "object") {
+        return value;
+      }
+      const maybeResult = (value as { result?: unknown }).result;
+      if (typeof maybeResult !== "function") {
+        return value;
+      }
+      const wrappedRun = value as { result: () => Promise<unknown> };
+      const originalResult = wrappedRun.result.bind(wrappedRun);
+      wrappedRun.result = async () => {
+        const result = await originalResult();
         log.info(
           `[model-io] response runId=${params.runId} sessionId=${params.sessionId} model=${modelLabel} response=${safeModelIoStringify(result)}`,
         );
         return result;
-      },
-    } as Awaited<ReturnType<StreamFn>>;
+      };
+      return wrappedRun;
+    };
+    if (run && typeof run === "object" && "then" in run && typeof run.then === "function") {
+      return run.then((value) => wrapResultLogger(value)) as ReturnType<StreamFn>;
+    }
+    return wrapResultLogger(run) as ReturnType<StreamFn>;
   };
 }
 
