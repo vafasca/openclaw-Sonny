@@ -15,6 +15,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -25,6 +26,10 @@ import {
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import {
+  buildAgentMessageFromConversationEntries,
+  type ConversationEntry,
+} from "../agent-prompt.js";
 import {
   abortChatRunById,
   type ChatAbortControllerEntry,
@@ -248,6 +253,41 @@ function stripDisallowedChatControlChars(message: string): string {
     }
   }
   return output;
+}
+
+export function buildChatWebPromptFromMessages(params: {
+  currentMessage: string;
+  messages: unknown[];
+}): string {
+  const entries: ConversationEntry[] = [];
+  for (const message of params.messages) {
+    const raw = stripEnvelopeFromMessage(message);
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const roleRaw = (raw as { role?: unknown }).role;
+    const role = typeof roleRaw === "string" ? roleRaw.trim().toLowerCase() : "";
+    if (role !== "user" && role !== "assistant" && role !== "tool" && role !== "function") {
+      continue;
+    }
+    const normalizedRole = role === "function" ? "tool" : role;
+    const text = extractTextFromChatContent((raw as { content?: unknown }).content)?.trim() ?? "";
+    if (!text) {
+      continue;
+    }
+    const sender =
+      normalizedRole === "assistant" ? "Assistant" : normalizedRole === "user" ? "User" : "Tool";
+    entries.push({
+      role: normalizedRole,
+      entry: { sender, body: text },
+    });
+  }
+  entries.push({
+    role: "user",
+    entry: { sender: "User", body: params.currentMessage },
+  });
+  const prompt = buildAgentMessageFromConversationEntries(entries).trim();
+  return prompt || params.currentMessage;
 }
 
 export function sanitizeChatSendMessageInput(
@@ -1354,9 +1394,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
       });
       try {
+        const priorMessages =
+          entry?.sessionId && storePath
+            ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile)
+            : [];
+        const assistantPrompt = buildChatWebPromptFromMessages({
+          currentMessage: parsedMessage,
+          messages: priorMessages,
+        });
         const responseText = await sendChatWebMessage({
           conversationId: sessionKey,
-          message: parsedMessage,
+          message: assistantPrompt,
           aiAssistant: cfg.chatweb.aiAssistant ?? "chatgpt",
           browserType: cfg.chatweb.browser ?? "chrome",
         });
