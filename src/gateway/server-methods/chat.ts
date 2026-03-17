@@ -260,6 +260,64 @@ export function sanitizeChatSendMessageInput(
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
 }
 
+type ChatWebSavedFile = { fileName: string; fullPath: string };
+
+function extractRequestedOutputDir(message: string): string | null {
+  const match = message.match(
+    /(?:guarda(?:rlo)?|guardar|save).*?(?:carpeta|folder|path)\s*[:：]?\s*([^\n\r]+)/i,
+  );
+  const raw = match?.[1]?.trim();
+  if (!raw) {
+    return null;
+  }
+  return raw.replace(/^['"]|['"]$/g, "").trim();
+}
+
+function extractCodeBlockFiles(responseText: string): Array<{ fileName: string; content: string }> {
+  const files: Array<{ fileName: string; content: string }> = [];
+  const regex =
+    /(?:^|\n)(?:✅\s*)?([A-Za-z0-9._-]+\.(?:html|css|js|ts|tsx|json|md|txt))\s*\n```[A-Za-z0-9_-]*\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(responseText))) {
+    const fileName = match[1]?.trim();
+    const content = match[2] ?? "";
+    if (!fileName) {
+      continue;
+    }
+    files.push({ fileName, content: content.replace(/\n$/, "") });
+  }
+  return files;
+}
+
+function maybePersistChatWebFiles(params: {
+  userMessage: string;
+  responseText: string;
+  log: GatewayRequestContext["logGateway"];
+}): ChatWebSavedFile[] {
+  const outputDir = extractRequestedOutputDir(params.userMessage);
+  if (!outputDir) {
+    return [];
+  }
+  const files = extractCodeBlockFiles(params.responseText);
+  if (files.length === 0) {
+    return [];
+  }
+
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+    const saved: ChatWebSavedFile[] = [];
+    for (const file of files) {
+      const fullPath = path.join(outputDir, file.fileName);
+      fs.writeFileSync(fullPath, file.content, "utf8");
+      saved.push({ fileName: file.fileName, fullPath });
+    }
+    return saved;
+  } catch (error) {
+    params.log.warn(`chatweb file persistence failed: ${formatForLog(error)}`);
+    return [];
+  }
+}
+
 function normalizeOptionalChatSystemReceipt(
   value: unknown,
 ): { ok: true; receipt?: string } | { ok: false; error: string } {
@@ -1256,8 +1314,24 @@ export const chatHandlers: GatewayRequestHandlers = {
           aiAssistant: cfg.chatweb.aiAssistant ?? "chatgpt",
           browserType: cfg.chatweb.browser ?? "chrome",
         });
+        const savedFiles = maybePersistChatWebFiles({
+          userMessage: parsedMessage,
+          responseText: responseText ?? "",
+          log: context.logGateway,
+        });
+        const finalText =
+          savedFiles.length > 0
+            ? [
+                responseText ?? "",
+                "",
+                "Saved files:",
+                ...savedFiles.map((entry) => `- ${entry.fullPath}`),
+              ]
+                .join("\n")
+                .trim()
+            : (responseText ?? "");
         const appended = appendAssistantTranscriptMessage({
-          message: responseText ?? "",
+          message: finalText,
           sessionId: entry?.sessionId ?? clientRunId,
           storePath,
           sessionFile: entry?.sessionFile,
@@ -1272,7 +1346,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             ? appended.message
             : {
                 role: "assistant",
-                content: [{ type: "text", text: responseText ?? "" }],
+                content: [{ type: "text", text: finalText }],
                 timestamp: Date.now(),
               },
         });
