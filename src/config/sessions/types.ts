@@ -103,6 +103,8 @@ export type SessionEntry = {
   fastMode?: boolean;
   /** When true, each prompt starts from a fresh session turn (web-chat style). */
   webchatMode?: boolean;
+  /** Preferred browser backend when webchat mode is enabled. */
+  webchatBrowser?: "chrome" | "edge";
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

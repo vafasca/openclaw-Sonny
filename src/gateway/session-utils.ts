@@ -956,6 +956,7 @@ export function listSessionsFromStore(params: {
         thinkingLevel: entry?.thinkingLevel,
         fastMode: entry?.fastMode,
         webchatMode: entry?.webchatMode,
+        webchatBrowser: entry?.webchatBrowser,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         elevatedLevel: entry?.elevatedLevel,

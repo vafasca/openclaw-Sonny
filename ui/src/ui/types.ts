@@ -384,6 +384,7 @@ export type GatewaySessionRow = {
   thinkingLevel?: string;
   fastMode?: boolean;
   webchatMode?: boolean;
+  webchatBrowser?: "chrome" | "edge";
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -403,6 +404,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   thinkingLevel?: string;
   fastMode?: boolean;
   webchatMode?: boolean;
+  webchatBrowser?: "chrome" | "edge";
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

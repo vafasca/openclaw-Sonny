@@ -14,7 +14,7 @@ import {
   resolveServerChatModelValue,
 } from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { loadSessions, patchSession } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -133,6 +133,43 @@ function renderCronFilterIcon(hiddenCount: number) {
   `;
 }
 
+function renderWebchatModeControls(state: AppViewState) {
+  const activeSession = state.sessionsResult?.sessions?.find(
+    (entry) => entry.key === state.sessionKey,
+  );
+  const enabled = activeSession?.webchatMode === true;
+  const browser = activeSession?.webchatBrowser ?? "chrome";
+  return html`
+    <div class="chat-controls__webchat">
+      <button
+        class="btn btn--sm ${enabled ? "btn--accent" : "btn--ghost"}"
+        ?disabled=${!state.connected}
+        @click=${async () => {
+          await patchSession(state, state.sessionKey, { webchatMode: !enabled });
+        }}
+        title="Toggle web chat mode"
+      >
+        ${icons.monitor}
+        <span>${enabled ? "Webchat ON" : "Webchat OFF"}</span>
+      </button>
+      <label class="field chat-controls__webchat-browser">
+        <select
+          .value=${browser}
+          ?disabled=${!state.connected || !enabled}
+          @change=${async (e: Event) => {
+            const next = (e.target as HTMLSelectElement).value as "chrome" | "edge";
+            await patchSession(state, state.sessionKey, { webchatBrowser: next });
+          }}
+          title="Webchat browser"
+        >
+          <option value="chrome">Chrome</option>
+          <option value="edge">Edge</option>
+        </select>
+      </label>
+    </div>
+  `;
+}
+
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
@@ -168,6 +205,7 @@ export function renderChatSessionSelect(state: AppViewState) {
         </select>
       </label>
       ${modelSelect}
+      ${renderWebchatModeControls(state)}
     </div>
   `;
 }

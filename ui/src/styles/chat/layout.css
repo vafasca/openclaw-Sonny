@@ -723,6 +723,26 @@
   max-width: 320px;
 }
 
+.chat-controls__webchat {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-controls__webchat .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-controls__webchat-browser {
+  min-width: 110px;
+}
+
+.chat-controls__webchat-browser select {
+  max-width: 120px;
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;

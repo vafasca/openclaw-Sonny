@@ -211,6 +211,38 @@ describe("gateway sessions patch", () => {
     expect(entry.webchatMode).toBeUndefined();
   });
 
+  test("sets webchat browser and enables webchat mode", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, webchatBrowser: "edge" },
+      }),
+    );
+    expect(entry.webchatBrowser).toBe("edge");
+    expect(entry.webchatMode).toBe(true);
+  });
+
+  test("clears webchat browser when webchat mode is disabled", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { webchatMode: true, webchatBrowser: "chrome" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, webchatMode: false },
+      }),
+    );
+    expect(entry.webchatMode).toBe(false);
+    expect(entry.webchatBrowser).toBeUndefined();
+  });
+
+  test("rejects invalid webchat browser", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, webchatBrowser: "firefox" },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error.message).toContain("invalid webchatBrowser");
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
