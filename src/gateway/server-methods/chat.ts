@@ -1187,7 +1187,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1242,6 +1242,72 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
+      return;
+    }
+
+    if (cfg.chatweb?.enabled === true) {
+      respond(true, { runId: clientRunId, status: "started" as const }, undefined, {
+        runId: clientRunId,
+      });
+      try {
+        const responseText = await sendChatWebMessage({
+          conversationId: sessionKey,
+          message: parsedMessage,
+          aiAssistant: cfg.chatweb.aiAssistant ?? "chatgpt",
+          browserType: cfg.chatweb.browser ?? "chrome",
+        });
+        const appended = appendAssistantTranscriptMessage({
+          message: responseText ?? "",
+          sessionId: entry?.sessionId ?? clientRunId,
+          storePath,
+          sessionFile: entry?.sessionFile,
+          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+          createIfMissing: true,
+        });
+        broadcastChatFinal({
+          context,
+          runId: clientRunId,
+          sessionKey: rawSessionKey,
+          message: appended.ok
+            ? appended.message
+            : {
+                role: "assistant",
+                content: [{ type: "text", text: responseText ?? "" }],
+                timestamp: Date.now(),
+              },
+        });
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload: { runId: clientRunId, status: "ok" as const },
+          },
+        });
+      } catch (err) {
+        const errorText = String(err);
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: errorText,
+            },
+            error: errorShape(ErrorCodes.UNAVAILABLE, errorText),
+          },
+        });
+        broadcastChatError({
+          context,
+          runId: clientRunId,
+          sessionKey: rawSessionKey,
+          errorMessage: errorText,
+        });
+      }
       return;
     }
 
@@ -1368,7 +1434,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(async () => {
+        .then(() => {
           if (!agentRunStarted) {
             const btwReplies = deliveredReplies
               .map((entry) => entry.payload)
@@ -1404,30 +1470,13 @@ export const chatHandlers: GatewayRequestHandlers = {
                 .filter(Boolean)
                 .join("\n\n")
                 .trim();
-              const chatWebEnabled = cfg.chatweb?.enabled === true;
-              const chatWebAssistant = cfg.chatweb?.aiAssistant ?? "chatgpt";
-              const chatWebBrowser = cfg.chatweb?.browser ?? "chrome";
-              const finalReply =
-                chatWebEnabled && combinedReply
-                  ? ((await sendChatWebMessage({
-                      conversationId: sessionKey,
-                      message: [
-                        "Rewrite this OpenClaw assistant response for the end user.",
-                        `User message: ${parsedMessage}`,
-                        "Assistant draft:",
-                        combinedReply,
-                      ].join("\n\n"),
-                      aiAssistant: chatWebAssistant,
-                      browserType: chatWebBrowser,
-                    }).catch(() => null)) ?? combinedReply)
-                  : combinedReply;
               let message: Record<string, unknown> | undefined;
-              if (finalReply) {
+              if (combinedReply) {
                 const { storePath: latestStorePath, entry: latestEntry } =
                   loadSessionEntry(sessionKey);
                 const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
                 const appended = appendAssistantTranscriptMessage({
-                  message: finalReply,
+                  message: combinedReply,
                   sessionId,
                   storePath: latestStorePath,
                   sessionFile: latestEntry?.sessionFile,
@@ -1443,7 +1492,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const now = Date.now();
                   message = {
                     role: "assistant",
-                    content: [{ type: "text", text: finalReply }],
+                    content: [{ type: "text", text: combinedReply }],
                     timestamp: now,
                     // Keep this compatible with Pi stopReason enums even though this message isn't
                     // persisted to the transcript due to the append failure.
