@@ -486,6 +486,29 @@
   align-self: center;
 }
 
+.agent-chat__web-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.agent-chat__web-mode-toggle input {
+  margin: 0;
+}
+
+.agent-chat__web-select {
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  color: var(--text);
+  font-size: 0.72rem;
+  padding: 0 6px;
+}
+
 .chat-send-btn {
   display: inline-flex;
   align-items: center;

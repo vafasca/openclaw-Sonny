@@ -5,6 +5,11 @@ import {
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import {
+  resolveExternalAiBrowserLabel,
+  resolveExternalAiProviderLabel,
+  resolveExternalAiUrl,
+} from "./ai-launcher.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -312,6 +317,7 @@ export function renderApp(state: AppViewState) {
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+  const selectedAiUrl = resolveExternalAiUrl(state.aiLauncherProvider);
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const basePath = normalizeBasePath(state.basePath ?? "");
@@ -521,6 +527,75 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="sidebar-shell__footer">
               <div class="sidebar-utility-group">
+                ${
+                  !navCollapsed
+                    ? html`
+                        <div class="sidebar-ai-launcher">
+                          <span class="sidebar-ai-launcher__title">AI Launcher</span>
+                          <label class="sidebar-ai-launcher__label" for="ai-provider">Provider</label>
+                          <select
+                            id="ai-provider"
+                            class="sidebar-ai-launcher__select"
+                            .value=${state.aiLauncherProvider}
+                            @change=${(event: Event) => {
+                              const value = (event.currentTarget as HTMLSelectElement).value;
+                              if (value === "chatgpt" || value === "claude") {
+                                state.aiLauncherProvider = value;
+                                state.chatWebProvider = value;
+                              }
+                            }}
+                          >
+                            <option value="chatgpt">ChatGPT</option>
+                            <option value="claude">Claude</option>
+                          </select>
+                          <label class="sidebar-ai-launcher__label" for="ai-browser">Browser</label>
+                          <select
+                            id="ai-browser"
+                            class="sidebar-ai-launcher__select"
+                            .value=${state.aiLauncherBrowser}
+                            @change=${(event: Event) => {
+                              const value = (event.currentTarget as HTMLSelectElement).value;
+                              if (value === "chrome" || value === "edge") {
+                                state.aiLauncherBrowser = value;
+                                state.chatWebBrowser = value;
+                              }
+                            }}
+                          >
+                            <option value="chrome">Chrome</option>
+                            <option value="edge">Edge</option>
+                          </select>
+                          <button
+                            type="button"
+                            class="sidebar-ai-launcher__open"
+                            @click=${async () => {
+                              await state.handleAiLauncherOpen();
+                            }}
+                            title=${`Open ${selectedAiUrl} in ${resolveExternalAiBrowserLabel(state.aiLauncherBrowser)}`}
+                          >
+                            Open selected AI in browser
+                          </button>
+                          <label class="sidebar-ai-launcher__toggle" title="Use browser chat flow for prompts">
+                            <input
+                              type="checkbox"
+                              .checked=${state.chatWebMode}
+                              @change=${(event: Event) => {
+                                state.chatWebMode = (
+                                  event.currentTarget as HTMLInputElement
+                                ).checked;
+                              }}
+                            />
+                            <span>Use in chat mode</span>
+                          </label>
+                          <div class="sidebar-ai-launcher__status" aria-live="polite">
+                            ${
+                              state.aiLauncherStatus ??
+                              `Ready: ${resolveExternalAiProviderLabel(state.aiLauncherProvider)} on ${resolveExternalAiBrowserLabel(state.aiLauncherBrowser)}`
+                            }
+                          </div>
+                        </div>
+                      `
+                    : nothing
+                }
                 <a
                   class="nav-item nav-item--external sidebar-utility-link"
                   href="https://docs.openclaw.ai"
@@ -1367,6 +1442,9 @@ export function renderApp(state: AppViewState) {
                 queue: state.chatQueue,
                 connected: state.connected,
                 canSend: state.connected,
+                webModeEnabled: state.chatWebMode,
+                webProvider: state.chatWebProvider,
+                webBrowser: state.chatWebBrowser,
                 disabledReason: chatDisabledReason,
                 error: state.lastError,
                 sessions: state.sessionsResult,
@@ -1387,6 +1465,17 @@ export function renderApp(state: AppViewState) {
                 onChatScroll: (event) => state.handleChatScroll(event),
                 getDraft: () => state.chatMessage,
                 onDraftChange: (next) => (state.chatMessage = next),
+                onWebModeEnabledChange: (enabled) => {
+                  state.chatWebMode = enabled;
+                },
+                onWebProviderChange: (provider) => {
+                  state.chatWebProvider = provider;
+                  state.aiLauncherProvider = provider;
+                },
+                onWebBrowserChange: (browser) => {
+                  state.chatWebBrowser = browser;
+                  state.aiLauncherBrowser = browser;
+                },
                 onRequestUpdate: requestHostUpdate,
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),

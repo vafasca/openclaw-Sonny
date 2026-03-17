@@ -72,6 +72,9 @@ export type ChatProps = {
   queue: ChatQueueItem[];
   connected: boolean;
   canSend: boolean;
+  webModeEnabled: boolean;
+  webProvider: "chatgpt" | "claude";
+  webBrowser: "chrome" | "edge";
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
@@ -90,6 +93,9 @@ export type ChatProps = {
   onToggleFocusMode: () => void;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
+  onWebModeEnabledChange: (enabled: boolean) => void;
+  onWebProviderChange: (provider: "chatgpt" | "claude") => void;
+  onWebBrowserChange: (browser: "chrome" | "edge") => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
   onAbort?: () => void;
@@ -1276,6 +1282,52 @@ export function renderChat(props: ChatProps) {
             }
 
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+
+            <label class="agent-chat__web-mode-toggle" title="Use browser web chat instead of API model">
+              <input
+                type="checkbox"
+                .checked=${props.webModeEnabled}
+                @change=${(event: Event) => {
+                  props.onWebModeEnabledChange((event.currentTarget as HTMLInputElement).checked);
+                }}
+              />
+              <span>Web chat</span>
+            </label>
+
+            ${
+              props.webModeEnabled
+                ? html`
+                    <select
+                      class="agent-chat__web-select"
+                      .value=${props.webProvider}
+                      @change=${(event: Event) => {
+                        const value = (event.currentTarget as HTMLSelectElement).value;
+                        if (value === "chatgpt" || value === "claude") {
+                          props.onWebProviderChange(value);
+                        }
+                      }}
+                      title="Web AI provider"
+                    >
+                      <option value="chatgpt">ChatGPT</option>
+                      <option value="claude">Claude</option>
+                    </select>
+                    <select
+                      class="agent-chat__web-select"
+                      .value=${props.webBrowser}
+                      @change=${(event: Event) => {
+                        const value = (event.currentTarget as HTMLSelectElement).value;
+                        if (value === "chrome" || value === "edge") {
+                          props.onWebBrowserChange(value);
+                        }
+                      }}
+                      title="Browser profile"
+                    >
+                      <option value="chrome">Chrome</option>
+                      <option value="edge">Edge</option>
+                    </select>
+                  `
+                : nothing
+            }
           </div>
 
           <div class="agent-chat__toolbar-right">

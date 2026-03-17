@@ -76,6 +76,12 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  chatWebMode: boolean;
+  chatWebProvider: "chatgpt" | "claude";
+  chatWebBrowser: "chrome" | "edge";
+  aiLauncherProvider: "chatgpt" | "claude";
+  aiLauncherBrowser: "chrome" | "edge";
+  aiLauncherStatus: string | null;
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
@@ -359,6 +365,7 @@ export type AppViewState = {
     setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    handleAiLauncherOpen: () => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;

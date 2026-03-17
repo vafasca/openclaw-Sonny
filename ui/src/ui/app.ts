@@ -165,6 +165,12 @@ export class OpenClawApp extends LitElement {
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() chatWebMode = false;
+  @state() chatWebProvider: "chatgpt" | "claude" = "chatgpt";
+  @state() chatWebBrowser: "chrome" | "edge" = "chrome";
+  @state() aiLauncherProvider: "chatgpt" | "claude" = "chatgpt";
+  @state() aiLauncherBrowser: "chrome" | "edge" = "chrome";
+  @state() aiLauncherStatus: string | null = null;
   @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
@@ -596,6 +602,39 @@ export class OpenClawApp extends LitElement {
       messageOverride,
       opts,
     );
+  }
+
+  async handleAiLauncherOpen() {
+    if (!this.client || !this.connected) {
+      this.aiLauncherStatus = "Connect to the gateway first.";
+      return;
+    }
+    try {
+      this.aiLauncherStatus = `Opening ${this.aiLauncherProvider} in ${this.aiLauncherBrowser}…`;
+      await this.client.request("chat.web.open", {
+        provider: this.aiLauncherProvider,
+        browser: this.aiLauncherBrowser,
+        sessionKey: this.sessionKey,
+      });
+      this.chatWebMode = true;
+      this.aiLauncherStatus = "Opened browser session.";
+    } catch (err) {
+      let message = "Unknown error";
+      if (err instanceof Error) {
+        message = err.message;
+      } else if (typeof err === "string") {
+        message = err;
+      } else if (typeof err === "object" && err && "message" in err) {
+        const maybeMessage = (err as { message?: unknown }).message;
+        if (typeof maybeMessage === "string" && maybeMessage.trim()) {
+          message = maybeMessage;
+        } else {
+          message = JSON.stringify(err);
+        }
+      }
+      this.aiLauncherStatus = message;
+      this.lastError = message;
+    }
   }
 
   async handleWhatsAppStart(force: boolean) {
