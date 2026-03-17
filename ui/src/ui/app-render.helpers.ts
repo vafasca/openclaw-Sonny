@@ -169,16 +169,6 @@ export function renderChatSessionSelect(state: AppViewState) {
         </select>
       </label>
       ${modelSelect}
-      <button
-        class="btn btn--sm chat-controls__chatweb"
-        type="button"
-        title="Abrir ChatGPT en el navegador"
-        @click=${() => {
-          openExternalUrlSafe("https://chatgpt.com/");
-        }}
-      >
-        chatweb
-      </button>
     </div>
   `;
 }
@@ -270,6 +260,16 @@ export function renderChatControls(state: AppViewState) {
         ${refreshIcon}
       </button>
       <span class="chat-controls__separator">|</span>
+      <button
+        class="btn btn--sm chat-controls__chatweb"
+        type="button"
+        title="Abrir ChatGPT en el navegador"
+        @click=${() => {
+          openExternalUrlSafe("https://chatgpt.com/");
+        }}
+      >
+        chatweb
+      </button>
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}

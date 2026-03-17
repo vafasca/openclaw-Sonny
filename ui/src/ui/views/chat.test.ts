@@ -4,7 +4,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderChatSessionSelect } from "../app-render.helpers.ts";
+import { renderChatControls, renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
@@ -799,7 +799,7 @@ describe("chat view", () => {
     const { state } = createChatHeaderState();
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
     const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
+    render(renderChatControls(state), container);
 
     const chatwebButton = container.querySelector<HTMLButtonElement>(".chat-controls__chatweb");
     expect(chatwebButton).not.toBeNull();
