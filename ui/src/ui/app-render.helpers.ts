@@ -220,6 +220,11 @@ export function renderChatControls(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const activeSession = state.sessionsResult?.sessions?.find(
+    (entry) => entry.key === state.sessionKey,
+  );
+  const webchatEnabled = activeSession?.webchatMode === true;
+  const webchatBrowser = activeSession?.webchatBrowser ?? "chrome";
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -295,6 +300,20 @@ export function renderChatControls(state: AppViewState) {
         title=${t("chat.refreshTitle")}
       >
         ${refreshIcon}
+      </button>
+      <button
+        class="btn btn--sm ${webchatEnabled ? "btn--accent" : "btn--ghost"}"
+        ?disabled=${!state.connected}
+        @click=${async () => {
+          await patchSession(state, state.sessionKey, { webchatMode: !webchatEnabled });
+        }}
+        aria-pressed=${webchatEnabled}
+        title=${
+          webchatEnabled ? `Web chat mode enabled (${webchatBrowser})` : "Enable web chat mode"
+        }
+      >
+        ${icons.monitor}
+        <span>Webchat</span>
       </button>
       <span class="chat-controls__separator">|</span>
       <button
