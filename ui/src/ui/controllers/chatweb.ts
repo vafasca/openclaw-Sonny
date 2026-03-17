@@ -22,14 +22,14 @@ export async function loadChatWebStatus(host: OpenClawApp): Promise<void> {
 }
 
 export async function startChatWebLogin(host: OpenClawApp): Promise<void> {
-  if (!host.client || !host.connected || !host.chatWebStatus) {
+  if (!host.client || !host.connected) {
     return;
   }
   host.chatWebLoading = true;
   try {
     const res = await host.client.request<{ sessionKey: string }>("chatweb.login.start", {
-      aiAssistant: host.chatWebStatus.aiAssistant,
-      browser: host.chatWebStatus.browser,
+      aiAssistant: host.chatWebStatus?.aiAssistant ?? "chatgpt",
+      browser: host.chatWebStatus?.browser ?? "chrome",
     });
     host.chatWebLoginSessionKey = res.sessionKey;
   } catch (err) {
@@ -55,4 +55,44 @@ export async function confirmChatWebLogin(host: OpenClawApp): Promise<void> {
   } finally {
     host.chatWebLoading = false;
   }
+}
+
+async function updateChatWebConfig(
+  host: OpenClawApp,
+  patch: Partial<{
+    enabled: boolean;
+    aiAssistant: "chatgpt" | "claude";
+    browser: "chrome" | "edge";
+  }>,
+): Promise<void> {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  host.chatWebLoading = true;
+  try {
+    await host.client.request("chatweb.configure", patch);
+    await loadChatWebStatus(host);
+  } catch (err) {
+    host.lastError = String(err);
+  } finally {
+    host.chatWebLoading = false;
+  }
+}
+
+export async function setChatWebEnabled(host: OpenClawApp, enabled: boolean): Promise<void> {
+  await updateChatWebConfig(host, { enabled });
+}
+
+export async function setChatWebAssistant(
+  host: OpenClawApp,
+  aiAssistant: "chatgpt" | "claude",
+): Promise<void> {
+  await updateChatWebConfig(host, { aiAssistant });
+}
+
+export async function setChatWebBrowser(
+  host: OpenClawApp,
+  browser: "chrome" | "edge",
+): Promise<void> {
+  await updateChatWebConfig(host, { browser });
 }

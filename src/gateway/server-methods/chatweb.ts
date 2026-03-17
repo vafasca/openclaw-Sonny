@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -177,8 +178,8 @@ async function sendViaChatWeb(params: {
 }
 
 export const chatWebHandlers: GatewayRequestHandlers = {
-  "chatweb.status": async ({ respond, context }) => {
-    const config = context.cfg.chatweb;
+  "chatweb.status": async ({ respond }) => {
+    const config = loadConfig().chatweb;
     const chatgptStorage = getStoragePath("chatgpt");
     const claudeStorage = getStoragePath("claude");
     respond(
@@ -256,8 +257,56 @@ export const chatWebHandlers: GatewayRequestHandlers = {
     activeLoginSessions.delete(sessionKey);
     respond(true, { success: true }, undefined);
   },
-  "chatweb.send": async ({ params, respond, context }) => {
-    const cfg = context.cfg.chatweb;
+
+  "chatweb.configure": async ({ params, respond }) => {
+    const enabledRaw = (params as { enabled?: unknown }).enabled;
+    const assistantRaw = (params as { aiAssistant?: unknown }).aiAssistant;
+    const browserRaw = (params as { browser?: unknown }).browser;
+
+    if (enabledRaw !== undefined && typeof enabledRaw !== "boolean") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "enabled must be a boolean"),
+      );
+      return;
+    }
+    if (assistantRaw !== undefined && assistantRaw !== "chatgpt" && assistantRaw !== "claude") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "aiAssistant must be chatgpt or claude"),
+      );
+      return;
+    }
+    if (browserRaw !== undefined && browserRaw !== "chrome" && browserRaw !== "edge") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "browser must be chrome or edge"),
+      );
+      return;
+    }
+
+    const cfg = loadConfig();
+    const current = cfg.chatweb ?? {};
+    const nextCfg = {
+      ...cfg,
+      chatweb: {
+        enabled: enabledRaw ?? current.enabled ?? false,
+        aiAssistant:
+          (assistantRaw as ChatWebAssistant | undefined) ?? current.aiAssistant ?? "chatgpt",
+        browser: (browserRaw as ChatWebBrowser | undefined) ?? current.browser ?? "chrome",
+      },
+    };
+
+    await writeConfigFile(nextCfg);
+
+    respond(true, { success: true, chatweb: nextCfg.chatweb }, undefined);
+  },
+
+  "chatweb.send": async ({ params, respond }) => {
+    const cfg = loadConfig().chatweb;
     if (!cfg?.enabled) {
       respond(
         false,

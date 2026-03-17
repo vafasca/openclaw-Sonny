@@ -131,6 +131,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "web.login.wait",
     "chatweb.login.start",
     "chatweb.login.confirm",
+    "chatweb.configure",
     "set-heartbeats",
     "system-event",
     "agents.files.set",

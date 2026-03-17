@@ -106,6 +106,7 @@ const BASE_METHODS = [
   "chatweb.status",
   "chatweb.login.start",
   "chatweb.login.confirm",
+  "chatweb.configure",
   "chatweb.send",
 ];
 
