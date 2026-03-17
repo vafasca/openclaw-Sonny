@@ -1,0 +1,293 @@
+import fs from "node:fs";
+import path from "node:path";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { resolveStateDir } from "../../config/paths.js";
+import { ErrorCodes, errorShape } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
+
+type ChatWebBrowser = "chrome" | "edge";
+type ChatWebAssistant = "chatgpt" | "claude";
+
+type LiveSession = {
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+  aiAssistant: ChatWebAssistant;
+  browserType: ChatWebBrowser;
+  chatId: string | null;
+};
+
+const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
+  chatgpt: "https://chatgpt.com/",
+  claude: "https://claude.ai/",
+};
+
+const activeLoginSessions = new Map<string, { browser: Browser; context: BrowserContext }>();
+const activeSessions = new Map<string, LiveSession>();
+
+function getDataDir(): string {
+  return path.join(resolveStateDir(process.env), "chatweb");
+}
+
+function getStoragePath(aiAssistant: ChatWebAssistant): string {
+  const dir = path.join(getDataDir(), aiAssistant);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, "storage-state.json");
+}
+
+function resolveChannel(browser: ChatWebBrowser): "chrome" | "msedge" {
+  return browser === "chrome" ? "chrome" : "msedge";
+}
+
+function looksLoggedIn(storagePath: string): boolean {
+  if (!fs.existsSync(storagePath)) {
+    return false;
+  }
+  try {
+    const storage = JSON.parse(fs.readFileSync(storagePath, "utf8")) as { cookies?: unknown[] };
+    const cookies = Array.isArray(storage.cookies) ? storage.cookies : [];
+    return cookies.length >= 3;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureSession(params: {
+  conversationId: string;
+  browserType: ChatWebBrowser;
+  aiAssistant: ChatWebAssistant;
+}): Promise<LiveSession> {
+  const existing = activeSessions.get(params.conversationId);
+  if (existing && existing.browser.isConnected()) {
+    return existing;
+  }
+  const storagePath = getStoragePath(params.aiAssistant);
+  if (!fs.existsSync(storagePath)) {
+    throw new Error("No saved login session. Start chatweb.login.start first.");
+  }
+  const browser = await chromium.launch({
+    channel: resolveChannel(params.browserType),
+    headless: false,
+    args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+  });
+  const context = await browser.newContext({
+    viewport: null,
+    storageState: storagePath,
+  });
+  const page = await context.newPage();
+  await page.goto(ASSISTANT_URLS[params.aiAssistant], {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  await page.waitForTimeout(1_500);
+  const next: LiveSession = {
+    browser,
+    context,
+    page,
+    aiAssistant: params.aiAssistant,
+    browserType: params.browserType,
+    chatId: null,
+  };
+  activeSessions.set(params.conversationId, next);
+  return next;
+}
+
+async function extractAssistantReply(
+  page: Page,
+  assistant: ChatWebAssistant,
+): Promise<string | null> {
+  await page.waitForTimeout(3_000);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 120_000) {
+    const stop = page
+      .locator('button[aria-label="Stop generating"], button[data-testid="stop-button"]')
+      .first();
+    const visible = await stop.isVisible().catch(() => false);
+    if (!visible) {
+      break;
+    }
+    await page.waitForTimeout(1_000);
+  }
+  const selectors =
+    assistant === "chatgpt"
+      ? [
+          '[data-message-author-role="assistant"]:last-child',
+          '[data-testid="conversation-turn"]:last-child [data-message-author-role="assistant"]',
+        ]
+      : ['[data-testid="conversation-turn"]:last-child', '[class*="prose"]:last-of-type'];
+  for (const selector of selectors) {
+    const loc = page.locator(selector).last();
+    const text = (await loc.textContent().catch(() => null))?.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
+export async function sendChatWebMessage(params: {
+  conversationId: string;
+  message: string;
+  aiAssistant: ChatWebAssistant;
+  browserType: ChatWebBrowser;
+}): Promise<string | null> {
+  const session = await ensureSession({
+    conversationId: params.conversationId,
+    aiAssistant: params.aiAssistant,
+    browserType: params.browserType,
+  });
+
+  return await sendViaChatWeb({ session, message: params.message });
+}
+
+async function sendViaChatWeb(params: {
+  session: LiveSession;
+  message: string;
+}): Promise<string | null> {
+  const inputSelectors =
+    params.session.aiAssistant === "chatgpt"
+      ? ["#prompt-textarea", 'textarea[placeholder*="Message"]', 'div[contenteditable="true"]']
+      : ['div[contenteditable="true"]', "textarea", "div.ProseMirror"];
+
+  let input: string | null = null;
+  for (const selector of inputSelectors) {
+    const found = await params.session.page
+      .locator(selector)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (found) {
+      input = selector;
+      break;
+    }
+  }
+  if (!input) {
+    throw new Error("Unable to find chat input in selected assistant page");
+  }
+
+  await params.session.page.click(input);
+  await params.session.page.keyboard.press("ControlOrMeta+A");
+  await params.session.page.keyboard.type(params.message);
+  await params.session.page.keyboard.press("Enter");
+
+  const response = await extractAssistantReply(params.session.page, params.session.aiAssistant);
+  const storagePath = getStoragePath(params.session.aiAssistant);
+  await params.session.context.storageState({ path: storagePath });
+  return response;
+}
+
+export const chatWebHandlers: GatewayRequestHandlers = {
+  "chatweb.status": async ({ respond, context }) => {
+    const config = context.cfg.chatweb;
+    const chatgptStorage = getStoragePath("chatgpt");
+    const claudeStorage = getStoragePath("claude");
+    respond(
+      true,
+      {
+        enabled: config?.enabled === true,
+        browser: config?.browser ?? "chrome",
+        aiAssistant: config?.aiAssistant ?? "chatgpt",
+        chatgpt: {
+          loggedIn: looksLoggedIn(chatgptStorage),
+          hasStorage: fs.existsSync(chatgptStorage),
+        },
+        claude: {
+          loggedIn: looksLoggedIn(claudeStorage),
+          hasStorage: fs.existsSync(claudeStorage),
+        },
+      },
+      undefined,
+    );
+  },
+  "chatweb.login.start": async ({ params, respond }) => {
+    const aiAssistant = (params as { aiAssistant?: ChatWebAssistant }).aiAssistant;
+    const browserType = (params as { browser?: ChatWebBrowser }).browser;
+    if (!aiAssistant || !browserType) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "aiAssistant and browser are required"),
+      );
+      return;
+    }
+    const sessionKey = `${aiAssistant}-${browserType}`;
+    const existing = activeLoginSessions.get(sessionKey);
+    if (existing) {
+      await existing.browser.close().catch(() => {});
+      activeLoginSessions.delete(sessionKey);
+    }
+    const browser = await chromium.launch({
+      channel: resolveChannel(browserType),
+      headless: false,
+      args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
+    });
+    const storagePath = getStoragePath(aiAssistant);
+    const context = await browser.newContext({
+      viewport: null,
+      storageState: fs.existsSync(storagePath) ? storagePath : undefined,
+    });
+    const page = await context.newPage();
+    await page.goto(ASSISTANT_URLS[aiAssistant], {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    activeLoginSessions.set(sessionKey, { browser, context });
+    respond(true, { success: true, sessionKey }, undefined);
+  },
+  "chatweb.login.confirm": async ({ params, respond }) => {
+    const sessionKey = (params as { sessionKey?: string }).sessionKey;
+    if (!sessionKey) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey is required"));
+      return;
+    }
+    const session = activeLoginSessions.get(sessionKey);
+    if (!session) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "active login session not found"),
+      );
+      return;
+    }
+    const [assistant] = sessionKey.split("-") as [ChatWebAssistant];
+    const storagePath = getStoragePath(assistant);
+    await session.context.storageState({ path: storagePath });
+    await session.browser.close().catch(() => {});
+    activeLoginSessions.delete(sessionKey);
+    respond(true, { success: true }, undefined);
+  },
+  "chatweb.send": async ({ params, respond, context }) => {
+    const cfg = context.cfg.chatweb;
+    if (!cfg?.enabled) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "chatweb mode is not enabled"),
+      );
+      return;
+    }
+    const message = (params as { message?: string }).message?.trim();
+    const conversationId = (params as { conversationId?: string }).conversationId?.trim();
+    if (!message || !conversationId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message and conversationId are required"),
+      );
+      return;
+    }
+    const aiAssistant = (cfg.aiAssistant ?? "chatgpt") as ChatWebAssistant;
+    const browserType = (cfg.browser ?? "chrome") as ChatWebBrowser;
+    try {
+      const responseText = await sendChatWebMessage({
+        conversationId,
+        message,
+        aiAssistant,
+        browserType,
+      });
+      respond(true, { response: responseText ?? "", aiAssistant, browser: browserType }, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
+    }
+  },
+};

@@ -63,6 +63,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { sendChatWebMessage } from "./chatweb.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1241,6 +1242,77 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
+      return;
+    }
+
+    const chatWebEnabled = cfg.chatweb?.enabled === true;
+    if (chatWebEnabled) {
+      const chatWebAssistant = cfg.chatweb?.aiAssistant ?? "chatgpt";
+      const chatWebBrowser = cfg.chatweb?.browser ?? "chrome";
+      respond(true, { runId: clientRunId, status: "started" as const }, undefined, {
+        runId: clientRunId,
+      });
+      try {
+        const responseText = await sendChatWebMessage({
+          conversationId: sessionKey,
+          message: parsedMessage,
+          aiAssistant: chatWebAssistant,
+          browserType: chatWebBrowser,
+        });
+        const nowTs = Date.now();
+        const appended = appendAssistantTranscriptMessage({
+          message: responseText ?? "",
+          sessionId: entry?.sessionId ?? clientRunId,
+          storePath,
+          sessionFile: entry?.sessionFile,
+          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+          createIfMissing: true,
+        });
+        const finalMessage = appended.ok
+          ? appended.message
+          : {
+              role: "assistant",
+              content: [{ type: "text", text: responseText ?? "" }],
+              timestamp: nowTs,
+            };
+        broadcastChatFinal({
+          context,
+          runId: clientRunId,
+          sessionKey: rawSessionKey,
+          message: finalMessage,
+        });
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: nowTs,
+            ok: true,
+            payload: { runId: clientRunId, status: "ok" as const },
+          },
+        });
+      } catch (err) {
+        const errorText = String(err);
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: errorText,
+            },
+            error: errorShape(ErrorCodes.UNAVAILABLE, errorText),
+          },
+        });
+        broadcastChatError({
+          context,
+          runId: clientRunId,
+          sessionKey: rawSessionKey,
+          errorMessage: errorText,
+        });
+      }
       return;
     }
 
