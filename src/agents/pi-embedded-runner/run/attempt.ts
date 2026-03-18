@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple, type Api } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -48,6 +48,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { createChatWebStreamFn } from "../../chatweb-stream.js";
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -1869,10 +1870,25 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
+      const useChatWebTransport = params.useChatWebTransport === true;
+      const effectiveModel = useChatWebTransport
+        ? {
+            ...params.model,
+            api: "chatweb-browser" as Api,
+            provider: "chatweb",
+            baseUrl: "chatweb://browser",
+          }
+        : params.model;
+      if (useChatWebTransport) {
+        // pi-coding-agent validates that every model has some provider credential
+        // before it ever calls our custom streamFn. ChatWeb is a browser-backed
+        // transport, so seed a dummy runtime credential to satisfy that check.
+        params.authStorage.setRuntimeApiKey("chatweb", "chatweb-browser");
+      }
       const transcriptPolicy = resolveTranscriptPolicy({
-        modelApi: params.model?.api,
-        provider: params.provider,
-        modelId: params.modelId,
+        modelApi: effectiveModel?.api,
+        provider: useChatWebTransport ? "chatweb" : params.provider,
+        modelId: useChatWebTransport ? "chatweb-browser" : params.modelId,
       });
 
       await prewarmSessionFile(params.sessionFile);
@@ -1920,9 +1936,9 @@ export async function runEmbeddedAttempt(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
-        provider: params.provider,
-        modelId: params.modelId,
-        model: params.model,
+        provider: useChatWebTransport ? "chatweb" : params.provider,
+        modelId: useChatWebTransport ? "chatweb-browser" : params.modelId,
+        model: effectiveModel,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -1968,13 +1984,12 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
-
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
         authStorage: params.authStorage,
         modelRegistry: params.modelRegistry,
-        model: params.model,
+        model: effectiveModel,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools: allCustomTools,
@@ -1998,7 +2013,7 @@ export async function runEmbeddedAttempt(
         contextWindowTokens: Math.max(
           1,
           Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            effectiveModel.contextWindow ?? effectiveModel.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
           ),
         ),
       });
@@ -2008,9 +2023,9 @@ export async function runEmbeddedAttempt(
         runId: params.runId,
         sessionId: activeSession.sessionId,
         sessionKey: params.sessionKey,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
+        provider: useChatWebTransport ? "chatweb" : params.provider,
+        modelId: useChatWebTransport ? "chatweb-browser" : params.modelId,
+        modelApi: effectiveModel.api,
         workspaceDir: params.workspaceDir,
       });
       const anthropicPayloadLogger = createAnthropicPayloadLogger({
@@ -2018,15 +2033,22 @@ export async function runEmbeddedAttempt(
         runId: params.runId,
         sessionId: activeSession.sessionId,
         sessionKey: params.sessionKey,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi: params.model.api,
+        provider: useChatWebTransport ? "chatweb" : params.provider,
+        modelId: useChatWebTransport ? "chatweb-browser" : params.modelId,
+        modelApi: effectiveModel.api,
         workspaceDir: params.workspaceDir,
       });
 
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
-      if (params.model.api === "ollama") {
+      if (useChatWebTransport) {
+        const chatWebStreamFn = createChatWebStreamFn({
+          aiAssistant: params.config?.chatweb?.aiAssistant ?? "chatgpt",
+          browserType: params.config?.chatweb?.browser ?? "chrome",
+        });
+        activeSession.agent.streamFn = chatWebStreamFn;
+        ensureCustomApiRegistered("chatweb-browser", chatWebStreamFn);
+      } else if (params.model.api === "ollama") {
         // Prioritize configured provider baseUrl so Docker/remote Ollama hosts work reliably.
         const providerConfig = params.config?.models?.providers?.[params.model.provider];
         const providerBaseUrl =
@@ -2058,33 +2080,37 @@ export async function runEmbeddedAttempt(
         typeof params.model.provider === "string" && params.model.provider.trim().length > 0
           ? params.model.provider
           : params.provider;
-      const shouldInjectNumCtx = shouldInjectOllamaCompatNumCtx({
-        model: params.model,
-        config: params.config,
-        providerId: providerIdForNumCtx,
-      });
+      const shouldInjectNumCtx =
+        !useChatWebTransport &&
+        shouldInjectOllamaCompatNumCtx({
+          model: effectiveModel,
+          config: params.config,
+          providerId: providerIdForNumCtx,
+        });
       if (shouldInjectNumCtx) {
         const numCtx = Math.max(
           1,
           Math.floor(
-            params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            effectiveModel.contextWindow ?? effectiveModel.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
           ),
         );
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
       }
 
-      applyExtraParamsToAgent(
-        activeSession.agent,
-        params.config,
-        params.provider,
-        params.modelId,
-        {
-          ...params.streamParams,
-          fastMode: params.fastMode,
-        },
-        params.thinkLevel,
-        sessionAgentId,
-      );
+      if (!useChatWebTransport) {
+        applyExtraParamsToAgent(
+          activeSession.agent,
+          params.config,
+          params.provider,
+          params.modelId,
+          {
+            ...params.streamParams,
+            fastMode: params.fastMode,
+          },
+          params.thinkLevel,
+          sessionAgentId,
+        );
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
@@ -2146,8 +2172,8 @@ export async function runEmbeddedAttempt(
       }
 
       if (
-        params.model.api === "openai-responses" ||
-        params.model.api === "openai-codex-responses"
+        !useChatWebTransport &&
+        (params.model.api === "openai-responses" || params.model.api === "openai-codex-responses")
       ) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -2188,6 +2214,7 @@ export async function runEmbeddedAttempt(
       );
 
       if (
+        !useChatWebTransport &&
         params.model.api === "anthropic-messages" &&
         shouldRepairMalformedAnthropicToolCallArguments(params.provider)
       ) {
@@ -2201,11 +2228,11 @@ export async function runEmbeddedAttempt(
         enabled: resolveModelIoDebugEnabled(process.env),
         runId: params.runId,
         sessionId: params.sessionId,
-        provider: params.provider,
-        modelId: params.modelId,
+        provider: useChatWebTransport ? "chatweb" : params.provider,
+        modelId: useChatWebTransport ? "chatweb-browser" : params.modelId,
       });
 
-      if (isXaiProvider(params.provider, params.modelId)) {
+      if (!useChatWebTransport && isXaiProvider(params.provider, params.modelId)) {
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
           activeSession.agent.streamFn,
         );
@@ -2220,9 +2247,9 @@ export async function runEmbeddedAttempt(
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
-          modelApi: params.model.api,
-          modelId: params.modelId,
-          provider: params.provider,
+          modelApi: effectiveModel.api,
+          modelId: useChatWebTransport ? "chatweb-browser" : params.modelId,
+          provider: useChatWebTransport ? "chatweb" : params.provider,
           allowedToolNames,
           config: params.config,
           sessionManager,

@@ -655,6 +655,10 @@ export async function runEmbeddedPiAgent(
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
+          if (params.config?.chatweb?.enabled === true) {
+            lastProfileId = resolvedProfileId;
+            return;
+          }
           if (apiKeyInfo.mode !== "aws-sdk") {
             throw new Error(
               `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
@@ -924,7 +928,6 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
-
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -963,6 +966,7 @@ export async function runEmbeddedPiAgent(
             provider,
             modelId,
             model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+            useChatWebTransport: params.config?.chatweb?.enabled === true,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,

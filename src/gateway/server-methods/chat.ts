@@ -68,7 +68,6 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
-import { sendChatWebMessage } from "./chatweb.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1232,7 +1231,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1287,88 +1286,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
-      return;
-    }
-
-    if (cfg.chatweb?.enabled === true) {
-      context.logGateway.info(
-        `chat.send routing mode=chatweb runId=${clientRunId} sessionKey=${sessionKey}`,
-      );
-      respond(true, { runId: clientRunId, status: "started" as const }, undefined, {
-        runId: clientRunId,
-      });
-      try {
-        const messageForChatWeb = systemProvenanceReceipt
-          ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-          : parsedMessage;
-        const stampedMessage = injectTimestamp(messageForChatWeb, timestampOptsFromConfig(cfg));
-        const priorMessages =
-          entry?.sessionId && storePath
-            ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile)
-            : [];
-        const prompt = buildChatWebPromptFromMessages({
-          currentMessage: stampedMessage,
-          messages: priorMessages,
-        });
-
-        const responseText = await sendChatWebMessage({
-          conversationId: sessionKey,
-          message: prompt,
-          aiAssistant: cfg.chatweb.aiAssistant ?? "chatgpt",
-          browserType: cfg.chatweb.browser ?? "chrome",
-        });
-
-        const finalText = (responseText ?? "").trim() || "No response from chatweb assistant.";
-        const appended = appendAssistantTranscriptMessage({
-          message: finalText,
-          sessionId: entry?.sessionId ?? clientRunId,
-          storePath,
-          sessionFile: entry?.sessionFile,
-          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-          createIfMissing: true,
-        });
-
-        broadcastChatFinal({
-          context,
-          runId: clientRunId,
-          sessionKey: rawSessionKey,
-          message: appended.ok
-            ? appended.message
-            : {
-                role: "assistant",
-                content: [{ type: "text", text: finalText }],
-                timestamp: Date.now(),
-              },
-        });
-
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${clientRunId}`,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload: { runId: clientRunId, status: "ok" as const },
-          },
-        });
-      } catch (err) {
-        const errorText = String(err);
-        setGatewayDedupeEntry({
-          dedupe: context.dedupe,
-          key: `chat:${clientRunId}`,
-          entry: {
-            ts: Date.now(),
-            ok: false,
-            payload: { runId: clientRunId, status: "error" as const, summary: errorText },
-            error: errorShape(ErrorCodes.UNAVAILABLE, errorText),
-          },
-        });
-        broadcastChatError({
-          context,
-          runId: clientRunId,
-          sessionKey: rawSessionKey,
-          errorMessage: errorText,
-        });
-      }
       return;
     }
 

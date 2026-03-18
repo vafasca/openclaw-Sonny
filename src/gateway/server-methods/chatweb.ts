@@ -152,6 +152,76 @@ async function extractAssistantReply(
   return null;
 }
 
+async function writeChatInput(params: {
+  page: Page;
+  selector: string;
+  message: string;
+}): Promise<void> {
+  const locator = params.page.locator(params.selector).first();
+  await locator.click();
+  const kind = await locator.evaluate((element) => {
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      return "field";
+    }
+    if (element instanceof HTMLElement && element.isContentEditable) {
+      return "contenteditable";
+    }
+    return "unknown";
+  });
+
+  if (kind === "field") {
+    await locator.evaluate((element, value) => {
+      if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+        element.focus();
+        element.value = value;
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }, params.message);
+    return;
+  }
+
+  await locator.evaluate((element, value) => {
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    element.focus();
+    element.textContent = value;
+    element.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }),
+    );
+  }, params.message);
+}
+
+async function submitChatInput(params: { page: Page; assistant: ChatWebAssistant }): Promise<void> {
+  const selectors =
+    params.assistant === "chatgpt"
+      ? [
+          'button[data-testid="send-button"]',
+          'button[aria-label*="Send"]',
+          'button[aria-label*="send"]',
+          'button[type="submit"]',
+        ]
+      : [
+          'button[aria-label*="Send"]',
+          'button[aria-label*="send"]',
+          'button[data-testid="send-button"]',
+          'button[type="submit"]',
+        ];
+
+  for (const selector of selectors) {
+    const button = params.page.locator(selector).first();
+    const visible = await button.isVisible().catch(() => false);
+    const enabled = await button.isEnabled().catch(() => false);
+    if (visible && enabled) {
+      await button.click();
+      return;
+    }
+  }
+
+  await params.page.keyboard.press("Enter");
+}
+
 export async function sendChatWebMessage(params: {
   conversationId: string;
   message: string;
@@ -204,10 +274,15 @@ async function sendViaChatWeb(params: {
     throw new Error("Unable to find chat input in selected assistant page");
   }
 
-  await params.session.page.click(input);
-  await params.session.page.keyboard.press("ControlOrMeta+A");
-  await params.session.page.keyboard.type(params.message);
-  await params.session.page.keyboard.press("Enter");
+  await writeChatInput({
+    page: params.session.page,
+    selector: input,
+    message: params.message,
+  });
+  await submitChatInput({
+    page: params.session.page,
+    assistant: params.session.aiAssistant,
+  });
 
   const response = await extractAssistantReply(params.session.page, params.session.aiAssistant);
   const storagePath = getStoragePath(params.session.aiAssistant);
