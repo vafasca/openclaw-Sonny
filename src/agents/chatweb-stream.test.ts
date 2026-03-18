@@ -27,21 +27,21 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain("User: hola");
   });
 
-  it("compacts long prompts and tool schemas before sending them to chatweb", () => {
+  it("keeps full system prompt, history, and tool schemas in the browser payload", () => {
     const prompt = buildChatWebAgentPrompt({
       context: {
-        systemPrompt: "S".repeat(5000),
-        messages: [{ role: "user", content: "U".repeat(2000), timestamp: 1 }],
+        systemPrompt: "SYSTEM_FULL",
+        messages: [{ role: "user", content: "mensaje completo", timestamp: 1 }],
         tools: [
           {
             name: "write",
-            description: "D".repeat(400),
+            description: "Write a file",
             parameters: {
               type: "object",
               required: ["file_path", "content"],
               properties: {
-                file_path: { type: "string", description: "path" },
-                content: { type: "string", description: "content" },
+                file_path: { type: "string", description: "absolute path" },
+                content: { type: "string", description: "file contents" },
               },
             },
           },
@@ -49,11 +49,11 @@ describe("chatweb-stream", () => {
       },
     });
 
-    expect(prompt.length).toBeLessThan(7000);
-    expect(prompt).toContain('"required": [');
-    expect(prompt).not.toContain("D".repeat(350));
-    expect(prompt).toContain("User:");
-    expect(prompt).toContain("…");
+    expect(prompt).toContain("SYSTEM_FULL");
+    expect(prompt).toContain("mensaje completo");
+    expect(prompt).toContain('"file_path"');
+    expect(prompt).toContain('"description": "absolute path"');
+    expect(prompt).toContain("Escape backslashes in Windows paths");
   });
 
   it("parses fenced JSON responses", () => {
