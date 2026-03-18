@@ -1879,6 +1879,12 @@ export async function runEmbeddedAttempt(
             baseUrl: "chatweb://browser",
           }
         : params.model;
+      if (useChatWebTransport) {
+        // pi-coding-agent validates that every model has some provider credential
+        // before it ever calls our custom streamFn. ChatWeb is a browser-backed
+        // transport, so seed a dummy runtime credential to satisfy that check.
+        params.authStorage.setRuntimeApiKey("chatweb", "chatweb-browser");
+      }
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: effectiveModel?.api,
         provider: useChatWebTransport ? "chatweb" : params.provider,

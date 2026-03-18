@@ -161,6 +161,7 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 vi.mock("../runs.js", () => ({
   setActiveEmbeddedRun: () => {},
   clearActiveEmbeddedRun: () => {},
+  updateActiveEmbeddedRunSnapshot: () => {},
 }));
 
 vi.mock("./images.js", () => ({
@@ -526,6 +527,75 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
         provider: "anthropic",
         modelId: "claude-sonnet-4-20250514",
         timestamp: expect.any(Number),
+      }),
+    );
+  });
+});
+
+describe("runEmbeddedAttempt chatweb auth bootstrap", () => {
+  const tempPaths: string[] = [];
+
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness({
+      subscribeImpl: createSubscriptionMock,
+    });
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
+  it("seeds a runtime chatweb credential before creating the session", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatweb-workspace-"));
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chatweb-agent-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+    tempPaths.push(workspaceDir, agentDir);
+    await fs.writeFile(sessionFile, "", "utf8");
+
+    const setRuntimeApiKey = vi.fn();
+    hoisted.createAgentSessionMock.mockImplementation(async () => ({
+      session: createDefaultEmbeddedSession(),
+    }));
+
+    const result = await runEmbeddedAttempt({
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:chatweb",
+      sessionFile,
+      workspaceDir,
+      agentDir,
+      config: {
+        chatweb: {
+          enabled: true,
+          aiAssistant: "chatgpt",
+          browser: "edge",
+        },
+      },
+      prompt: "hello",
+      timeoutMs: 10_000,
+      runId: "run-chatweb-auth-bootstrap",
+      provider: "openai",
+      modelId: "gpt-test",
+      model: testModel,
+      authStorage: {
+        setRuntimeApiKey,
+        getApiKey: vi.fn(),
+      } as unknown as AuthStorage,
+      modelRegistry: {} as ModelRegistry,
+      thinkLevel: "off",
+      senderIsOwner: true,
+      disableMessageTool: true,
+      useChatWebTransport: true,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(setRuntimeApiKey).toHaveBeenCalledWith("chatweb", "chatweb-browser");
+    expect(hoisted.createAgentSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "chatweb",
+          api: "chatweb-browser",
+          baseUrl: "chatweb://browser",
+        }),
       }),
     );
   });
