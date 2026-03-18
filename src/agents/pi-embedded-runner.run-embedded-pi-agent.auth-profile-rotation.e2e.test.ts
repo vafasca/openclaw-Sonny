@@ -1276,7 +1276,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     }
   });
 
-  it("keeps the provider API transport when chatweb is enabled and an API key is available", async () => {
+  it("uses chatweb transport when chatweb is enabled even if an API key is available", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockSingleSuccessfulAttempt();
@@ -1298,14 +1298,14 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
-        useChatWebTransport: false,
+        useChatWebTransport: true,
         provider: "openai",
         modelId: "mock-1",
       });
     });
   });
 
-  it("falls back to chatweb transport when chatweb is enabled and no API key is available", async () => {
+  it("keeps using chatweb transport when chatweb is enabled and no API key is available", async () => {
     const previousOpenAiKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
     try {
