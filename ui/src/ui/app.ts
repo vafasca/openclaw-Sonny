@@ -164,6 +164,15 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatWebStatus: {
+    enabled: boolean;
+    browser: "chrome" | "edge";
+    aiAssistant: "chatgpt" | "claude";
+    chatgpt: { loggedIn: boolean; hasStorage: boolean };
+    claude: { loggedIn: boolean; hasStorage: boolean };
+  } | null = null;
+  @state() chatWebLoading = false;
+  @state() chatWebLoginSessionKey: string | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
 

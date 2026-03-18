@@ -76,6 +76,15 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  chatWebStatus: {
+    enabled: boolean;
+    browser: "chrome" | "edge";
+    aiAssistant: "chatgpt" | "claude";
+    chatgpt: { loggedIn: boolean; hasStorage: boolean };
+    claude: { loggedIn: boolean; hasStorage: boolean };
+  } | null;
+  chatWebLoading: boolean;
+  chatWebLoginSessionKey: string | null;
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;

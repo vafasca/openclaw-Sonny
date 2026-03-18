@@ -7,6 +7,7 @@ import {
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveModelIoDebugEnabled,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -145,6 +146,33 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("resolveModelIoDebugEnabled", () => {
+  it("returns false by default", () => {
+    expect(resolveModelIoDebugEnabled({}, ["node", "gateway"])).toBe(false);
+  });
+
+  it("accepts OPENCLAW_DEBUG_MODEL_IO truthy values", () => {
+    expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_MODEL_IO: "1" })).toBe(true);
+    expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_MODEL_IO: "true" })).toBe(true);
+    expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_MODEL_IO: "On" })).toBe(true);
+  });
+
+  it("accepts legacy OPENCLAW_DEBUG_PROMPT_IO key", () => {
+    expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_PROMPT_IO: "yes" })).toBe(true);
+  });
+
+  it("ignores falsy values", () => {
+    expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_MODEL_IO: "0" })).toBe(false);
+    expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_PROMPT_IO: "false" })).toBe(false);
+  });
+
+  it("enables debug mode in --dev runs", () => {
+    expect(
+      resolveModelIoDebugEnabled({}, ["node", "scripts/run-node.mjs", "gateway", "--dev"]),
+    ).toBe(true);
   });
 });
 

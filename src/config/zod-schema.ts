@@ -625,6 +625,14 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     talk: TalkSchema.optional(),
+    chatweb: z
+      .object({
+        enabled: z.boolean().optional(),
+        aiAssistant: z.enum(["chatgpt", "claude"]).optional(),
+        browser: z.enum(["chrome", "edge"]).optional(),
+      })
+      .strict()
+      .optional(),
     gateway: z
       .object({
         port: z.number().int().positive().optional(),

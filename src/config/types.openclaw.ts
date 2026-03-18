@@ -118,6 +118,15 @@ export type OpenClawConfig = {
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
+
+  chatweb?: {
+    /** Enable browser-driven ChatGPT/Claude routing for chat.send. */
+    enabled?: boolean;
+    /** Assistant target used by chatweb mode. */
+    aiAssistant?: "chatgpt" | "claude";
+    /** Browser channel for Playwright chatweb sessions. */
+    browser?: "chrome" | "edge";
+  };
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
 };

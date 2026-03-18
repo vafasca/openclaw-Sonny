@@ -103,6 +103,11 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "chatweb.status",
+  "chatweb.login.start",
+  "chatweb.login.confirm",
+  "chatweb.configure",
+  "chatweb.send",
 ];
 
 export function listGatewayMethods(): string[] {

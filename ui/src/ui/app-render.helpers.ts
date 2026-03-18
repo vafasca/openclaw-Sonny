@@ -14,6 +14,14 @@ import {
   resolveServerChatModelValue,
 } from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import {
+  confirmChatWebLogin,
+  loadChatWebStatus,
+  setChatWebAssistant,
+  setChatWebBrowser,
+  setChatWebEnabled,
+  startChatWebLogin,
+} from "./controllers/chatweb.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
@@ -172,6 +180,91 @@ export function renderChatSessionSelect(state: AppViewState) {
   `;
 }
 
+function renderChatWebStatusCard(state: AppViewState) {
+  const status = state.chatWebStatus;
+  const assistant = status?.aiAssistant ?? "chatgpt";
+  const browser = status?.browser ?? "chrome";
+  const selected = assistant === "claude" ? status?.claude : status?.chatgpt;
+  const loggedIn = selected?.loggedIn === true;
+  const indicatorClass = loggedIn ? "chatweb-indicator chatweb-indicator--ok" : "chatweb-indicator";
+
+  return html`
+    <div class="chatweb-status-card">
+      <div class="chatweb-status-line">
+        <span class=${indicatorClass}></span>
+        <strong>ChatWeb</strong>
+        <label class="chatweb-inline-label">
+          <input
+            type="checkbox"
+            .checked=${status?.enabled === true}
+            ?disabled=${!state.connected || state.chatWebLoading}
+            @change=${(event: Event) => {
+              const next = (event.target as HTMLInputElement).checked;
+              void setChatWebEnabled(state as unknown as OpenClawApp, next);
+            }}
+          />
+          Enabled
+        </label>
+        <span>•</span>
+        <span>${loggedIn ? "Logged in" : "Not logged in"}</span>
+      </div>
+      <div class="chatweb-status-config">
+        <label>
+          Assistant
+          <select
+            .value=${assistant}
+            ?disabled=${!state.connected || state.chatWebLoading}
+            @change=${(event: Event) => {
+              const next = (event.target as HTMLSelectElement).value as "chatgpt" | "claude";
+              void setChatWebAssistant(state as unknown as OpenClawApp, next);
+            }}
+          >
+            <option value="chatgpt">ChatGPT</option>
+            <option value="claude">Claude</option>
+          </select>
+        </label>
+        <label>
+          Browser
+          <select
+            .value=${browser}
+            ?disabled=${!state.connected || state.chatWebLoading}
+            @change=${(event: Event) => {
+              const next = (event.target as HTMLSelectElement).value as "chrome" | "edge";
+              void setChatWebBrowser(state as unknown as OpenClawApp, next);
+            }}
+          >
+            <option value="chrome">Chrome</option>
+            <option value="edge">Edge</option>
+          </select>
+        </label>
+      </div>
+      <div class="chatweb-status-actions">
+        <button
+          class="btn btn--sm"
+          ?disabled=${!state.connected || state.chatWebLoading}
+          @click=${() => loadChatWebStatus(state as unknown as OpenClawApp)}
+        >
+          Refresh
+        </button>
+        <button
+          class="btn btn--sm"
+          ?disabled=${!state.connected || state.chatWebLoading}
+          @click=${() => startChatWebLogin(state as unknown as OpenClawApp)}
+        >
+          Open Login
+        </button>
+        <button
+          class="btn btn--sm"
+          ?disabled=${!state.connected || state.chatWebLoading || !state.chatWebLoginSessionKey}
+          @click=${() => confirmChatWebLogin(state as unknown as OpenClawApp)}
+        >
+          Confirm Login
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron
@@ -233,6 +326,7 @@ export function renderChatControls(state: AppViewState) {
   `;
   return html`
     <div class="chat-controls">
+      ${renderChatWebStatusCard(state)}
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
@@ -408,6 +502,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         e.stopPropagation();
       }}>
         <div class="chat-controls">
+      ${renderChatWebStatusCard(state)}
           <label class="field chat-controls__session">
             <select
               .value=${state.sessionKey}

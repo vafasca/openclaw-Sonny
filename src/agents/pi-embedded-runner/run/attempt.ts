@@ -156,6 +156,139 @@ type PromptBuildHookRunner = {
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
+const MODEL_IO_DEBUG_ENV_KEYS = ["OPENCLAW_DEBUG_MODEL_IO", "OPENCLAW_DEBUG_PROMPT_IO"] as const;
+const MODEL_IO_DEBUG_MAX_CHARS = 16_000;
+
+function truncateModelIoLog(value: string): string {
+  if (value.length <= MODEL_IO_DEBUG_MAX_CHARS) {
+    return value;
+  }
+  return `${value.slice(0, MODEL_IO_DEBUG_MAX_CHARS)}\n...<truncated ${value.length - MODEL_IO_DEBUG_MAX_CHARS} chars>`;
+}
+
+function safeModelIoStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const serialized = JSON.stringify(
+    value,
+    (_key, candidate) => {
+      if (typeof candidate === "bigint") {
+        return candidate.toString();
+      }
+      if (!candidate || typeof candidate !== "object") {
+        return candidate;
+      }
+      if (seen.has(candidate)) {
+        return "[Circular]";
+      }
+      seen.add(candidate);
+      return candidate;
+    },
+    2,
+  );
+  if (serialized) {
+    return truncateModelIoLog(serialized);
+  }
+  return String(value);
+}
+
+export function resolveModelIoDebugEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+): boolean {
+  for (const key of MODEL_IO_DEBUG_ENV_KEYS) {
+    const raw = env[key];
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const normalized = raw.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) {
+      return true;
+    }
+  }
+  return argv.includes("--dev");
+}
+
+function summarizeModelIoContext(context: unknown): string {
+  const source = context as {
+    system?: unknown;
+    messages?: Array<{ role?: unknown; content?: unknown }>;
+  };
+  const messages = Array.isArray(source?.messages) ? source.messages : [];
+  const lastUser = [...messages]
+    .toReversed()
+    .find((message) => typeof message?.role === "string" && message.role === "user");
+  const prompt =
+    typeof lastUser?.content === "string"
+      ? lastUser.content.trim()
+      : safeModelIoStringify(lastUser?.content).trim();
+  const system =
+    typeof source?.system === "string"
+      ? source.system.trim()
+      : source?.system
+        ? safeModelIoStringify(source.system)
+        : "";
+  return trimChatSections({ prompt, system });
+}
+
+function trimChatSections(params: { prompt: string; system: string }): string {
+  const sections = [
+    params.prompt ? `prompt=${truncateModelIoLog(params.prompt)}` : "prompt=<none>",
+    params.system ? `system=${truncateModelIoLog(params.system)}` : "system=<none>",
+  ];
+  return sections.join(" ");
+}
+
+function wrapStreamFnModelIoDebug(params: {
+  baseFn: StreamFn;
+  enabled: boolean;
+  runId: string;
+  sessionId: string;
+  provider: string;
+  modelId: string;
+}): StreamFn {
+  if (!params.enabled) {
+    return params.baseFn;
+  }
+  return (model, context, options) => {
+    const modelLabel = `${params.provider}/${params.modelId}`;
+    log.info(
+      `[model-io] request runId=${params.runId} sessionId=${params.sessionId} model=${modelLabel} ${summarizeModelIoContext(context)} context=${safeModelIoStringify(context)}`,
+    );
+    const wrappedOptions = {
+      ...options,
+      onPayload: (payload: unknown) => {
+        log.info(
+          `[model-io] payload runId=${params.runId} sessionId=${params.sessionId} model=${modelLabel} payload=${safeModelIoStringify(payload)}`,
+        );
+        return options?.onPayload?.(payload, model);
+      },
+    };
+    const run = params.baseFn(model, context, wrappedOptions);
+    const wrapResultLogger = (value: unknown) => {
+      if (!value || typeof value !== "object") {
+        return value;
+      }
+      const maybeResult = (value as { result?: unknown }).result;
+      if (typeof maybeResult !== "function") {
+        return value;
+      }
+      const wrappedRun = value as { result: () => Promise<unknown> };
+      const originalResult = wrappedRun.result.bind(wrappedRun);
+      wrappedRun.result = async () => {
+        const result = await originalResult();
+        log.info(
+          `[model-io] response runId=${params.runId} sessionId=${params.sessionId} model=${modelLabel} response=${safeModelIoStringify(result)}`,
+        );
+        return result;
+      };
+      return wrappedRun;
+    };
+    if (run && typeof run === "object" && "then" in run && typeof run.then === "function") {
+      return run.then((value) => wrapResultLogger(value)) as ReturnType<StreamFn>;
+    }
+    return wrapResultLogger(run) as ReturnType<StreamFn>;
+  };
+}
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
@@ -2062,6 +2195,15 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      activeSession.agent.streamFn = wrapStreamFnModelIoDebug({
+        baseFn: activeSession.agent.streamFn,
+        enabled: resolveModelIoDebugEnabled(process.env),
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        modelId: params.modelId,
+      });
 
       if (isXaiProvider(params.provider, params.modelId)) {
         activeSession.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(
