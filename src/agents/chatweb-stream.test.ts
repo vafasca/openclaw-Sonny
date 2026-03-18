@@ -1,4 +1,5 @@
 import type { Context, Model } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import {
   buildChatWebAgentPrompt,
@@ -7,7 +8,7 @@ import {
 } from "./chatweb-stream.js";
 
 describe("chatweb-stream", () => {
-  it("builds a prompt that includes system prompt and tool schemas", () => {
+  it("builds a prompt that preserves the system message, messages, and tool schemas", () => {
     const prompt = buildChatWebAgentPrompt({
       context: {
         systemPrompt: "You are OpenClaw.",
@@ -16,15 +17,17 @@ describe("chatweb-stream", () => {
           {
             name: "write",
             description: "Write a file",
-            parameters: { type: "object", properties: { path: { type: "string" } } },
+            parameters: Type.Object({ path: Type.String() }),
           },
         ],
       },
     });
 
+    expect(prompt).toContain('"role": "system"');
     expect(prompt).toContain("You are OpenClaw.");
     expect(prompt).toContain('"name": "write"');
-    expect(prompt).toContain("User: hola");
+    expect(prompt).toContain('"role": "user"');
+    expect(prompt).toContain('"hola"');
   });
 
   it("keeps full system prompt, history, and tool schemas in the browser payload", () => {
@@ -36,14 +39,10 @@ describe("chatweb-stream", () => {
           {
             name: "write",
             description: "Write a file",
-            parameters: {
-              type: "object",
-              required: ["file_path", "content"],
-              properties: {
-                file_path: { type: "string", description: "absolute path" },
-                content: { type: "string", description: "file contents" },
-              },
-            },
+            parameters: Type.Object({
+              file_path: Type.String({ description: "absolute path" }),
+              content: Type.String({ description: "file contents" }),
+            }),
           },
         ],
       },
@@ -53,7 +52,7 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain("mensaje completo");
     expect(prompt).toContain('"file_path"');
     expect(prompt).toContain('"description": "absolute path"');
-    expect(prompt).toContain("Escape backslashes in Windows paths");
+    expect(prompt).toContain('"stopReason": "stop | toolUse"');
   });
 
   it("parses fenced JSON responses", () => {
@@ -65,14 +64,19 @@ describe("chatweb-stream", () => {
     expect(parsed?.toolCalls?.[0]?.arguments).toEqual({ file_path: "a.txt" });
   });
 
-  it("emits toolUse when the browser assistant returns tool calls", async () => {
+  it("emits toolUse when the browser assistant returns assistant content blocks", async () => {
     const streamFn = createChatWebStreamFn({
       aiAssistant: "chatgpt",
       browserType: "chrome",
       deps: {
         sendMessage: async () =>
           JSON.stringify({
-            toolCalls: [{ id: "call_1", name: "write", arguments: { file_path: "a.txt" } }],
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              { type: "thinking", thinking: "voy a escribir el archivo" },
+              { type: "toolCall", id: "call_1", name: "write", arguments: { file_path: "a.txt" } },
+            ],
           }),
         now: () => 123,
       },
@@ -97,6 +101,10 @@ describe("chatweb-stream", () => {
     const message = await streamFn(model, context).result();
 
     expect(message.stopReason).toBe("toolUse");
+    expect(message.content).toContainEqual({
+      type: "thinking",
+      thinking: "voy a escribir el archivo",
+    });
     expect(message.content).toContainEqual({
       type: "toolCall",
       id: "call_1",
