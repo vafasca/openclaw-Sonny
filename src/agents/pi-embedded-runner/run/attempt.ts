@@ -48,6 +48,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { createChatWebStreamFn } from "../../chatweb-stream.js";
 import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
@@ -2050,6 +2051,13 @@ export async function runEmbeddedAttempt(
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
         activeSession.agent.streamFn = streamSimple;
+      }
+
+      if (params.config?.chatweb?.enabled === true) {
+        activeSession.agent.streamFn = createChatWebStreamFn({
+          aiAssistant: params.config.chatweb.aiAssistant ?? "chatgpt",
+          browserType: params.config.chatweb.browser ?? "chrome",
+        });
       }
 
       // Ollama with OpenAI-compatible API needs num_ctx in payload.options.

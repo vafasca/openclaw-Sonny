@@ -655,6 +655,10 @@ export async function runEmbeddedPiAgent(
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
+          if (params.config?.chatweb?.enabled === true) {
+            lastProfileId = resolvedProfileId;
+            return;
+          }
           if (apiKeyInfo.mode !== "aws-sdk") {
             throw new Error(
               `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
