@@ -79,6 +79,15 @@ function makeBaseAssistantMessage(params: {
   };
 }
 
+function makeChatWebAssistantMessage(now: number): AssistantMessage {
+  return makeBaseAssistantMessage({
+    now,
+    model: CHATWEB_MODEL_ID,
+    provider: CHATWEB_PROVIDER_ID,
+    api: CHATWEB_API_ID,
+  });
+}
+
 function formatToolSchema(tool: Tool): Record<string, unknown> {
   return {
     name: tool.name,
@@ -210,6 +219,17 @@ function buildRepairPrompt(rawResponse: string): string {
   ].join("\n\n");
 }
 
+function buildEmptyRetryPrompt(originalPrompt: string): string {
+  return [
+    "Your previous response was empty.",
+    "Retry the full task now and return exactly one JSON object only.",
+    "Do not include markdown fences. Do not include explanations.",
+    "Start with { and end with }.",
+    "Original task payload:",
+    originalPrompt,
+  ].join("\n\n");
+}
+
 function extractJsonCandidate(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -318,12 +338,7 @@ export function createChatWebStreamFn(params: {
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
     const startedAt = now();
-    const partial = makeBaseAssistantMessage({
-      now: startedAt,
-      model: model.id || CHATWEB_MODEL_ID,
-      provider: model.provider || CHATWEB_PROVIDER_ID,
-      api: model.api || CHATWEB_API_ID,
-    });
+    const partial = makeChatWebAssistantMessage(startedAt);
     stream.push({ type: "start", partial });
 
     void (async () => {
@@ -340,11 +355,13 @@ export function createChatWebStreamFn(params: {
         let rawResponse = firstRawResponse;
         let parsed = parseChatWebResponse(rawResponse);
         if (!parsed) {
-          const repairPrompt = buildRepairPrompt(firstRawResponse);
+          const retryPrompt = firstRawResponse.trim()
+            ? buildRepairPrompt(firstRawResponse)
+            : buildEmptyRetryPrompt(prompt);
           const repairedRawResponse =
             (await sendMessage({
               conversationId,
-              message: repairPrompt,
+              message: retryPrompt,
               aiAssistant: params.aiAssistant,
               browserType: params.browserType,
             })) ?? "";
@@ -353,12 +370,7 @@ export function createChatWebStreamFn(params: {
             parsed = parseChatWebResponse(repairedRawResponse);
           }
         }
-        const message = makeBaseAssistantMessage({
-          now: now(),
-          model: model.id || CHATWEB_MODEL_ID,
-          provider: model.provider || CHATWEB_PROVIDER_ID,
-          api: model.api || CHATWEB_API_ID,
-        });
+        const message = makeChatWebAssistantMessage(now());
 
         if (!parsed) {
           message.content.push({
@@ -404,12 +416,7 @@ export function createChatWebStreamFn(params: {
         stream.push({ type: "done", reason: "stop", message });
         stream.end(message);
       } catch (error) {
-        const message = makeBaseAssistantMessage({
-          now: now(),
-          model: model.id || CHATWEB_MODEL_ID,
-          provider: model.provider || CHATWEB_PROVIDER_ID,
-          api: model.api || CHATWEB_API_ID,
-        });
+        const message = makeChatWebAssistantMessage(now());
         message.stopReason = "error";
         message.errorMessage = error instanceof Error ? error.message : String(error);
         stream.push({ type: "error", reason: "error", error: message });

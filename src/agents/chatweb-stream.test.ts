@@ -190,11 +190,56 @@ describe("chatweb-stream", () => {
       "Convert that previous answer into exactly one valid JSON object only.",
     );
     expect(message.stopReason).toBe("toolUse");
+    expect(message.model).toBe("chatweb-browser");
+    expect(message.provider).toBe("chatweb");
     expect(message.content).toContainEqual({
       type: "toolCall",
       id: "call_1",
       name: "write",
       arguments: { file_path: "F:\\\\workspace_sonny\\\\index.html", content: "<html />" },
     });
+  });
+
+  it("retries with the original task when the first browser response is empty", async () => {
+    const prompts: string[] = [];
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async ({ message }) => {
+          prompts.push(message);
+          if (prompts.length === 1) {
+            return "";
+          }
+          return '{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}';
+        },
+      },
+    });
+
+    const model = {
+      id: "openrouter/arcee-ai/trinity-mini:free",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+
+    const message = await streamFn(model, { messages: [] }).result();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Your previous response was empty.");
+    expect(prompts[1]).toContain("Original task payload:");
+    expect(prompts[1]).not.toContain(
+      "Convert that previous answer into exactly one valid JSON object only.",
+    );
+    expect(message.stopReason).toBe("stop");
+    expect(message.model).toBe("chatweb-browser");
+    expect(message.provider).toBe("chatweb");
+    expect(message.content).toContainEqual({ type: "text", text: "ok" });
   });
 });

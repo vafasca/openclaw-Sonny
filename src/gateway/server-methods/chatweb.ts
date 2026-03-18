@@ -30,6 +30,7 @@ const activeSessions = new Map<string, LiveSession>();
 const logChatWeb = createSubsystemLogger("gateway/chatweb");
 const CHATWEB_DEBUG_ENV_KEYS = ["OPENCLAW_DEBUG_MODEL_IO", "OPENCLAW_DEBUG_PROMPT_IO"] as const;
 const CHATWEB_DEBUG_MAX_CHARS = 16_000;
+const CHATWEB_RESPONSE_TIMEOUT_MS = 180_000;
 
 function isChatWebIoDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   for (const key of CHATWEB_DEBUG_ENV_KEYS) {
@@ -122,34 +123,98 @@ async function ensureSession(params: {
 async function extractAssistantReply(
   page: Page,
   assistant: ChatWebAssistant,
+  previousAssistantCount: number,
 ): Promise<string | null> {
-  await page.waitForTimeout(3_000);
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 120_000) {
+  let lastNonEmptyReply = "";
+  let stableIterations = 0;
+  while (Date.now() - startedAt < CHATWEB_RESPONSE_TIMEOUT_MS) {
     const stop = page
       .locator('button[aria-label="Stop generating"], button[data-testid="stop-button"]')
       .first();
     const visible = await stop.isVisible().catch(() => false);
-    if (!visible) {
-      break;
+    const latestReply = await readLatestAssistantReplyText(page, assistant);
+    if (latestReply && latestReply === lastNonEmptyReply) {
+      stableIterations += 1;
+    } else if (latestReply) {
+      stableIterations = 1;
+      lastNonEmptyReply = latestReply;
+    } else {
+      stableIterations = 0;
     }
-    await page.waitForTimeout(1_000);
+
+    const currentAssistantCount = await countAssistantMessages(page, assistant);
+    const hasNewAssistantTurn = currentAssistantCount > previousAssistantCount;
+    if (!visible && hasNewAssistantTurn && lastNonEmptyReply && stableIterations >= 2) {
+      return lastNonEmptyReply;
+    }
+    await page.waitForTimeout(1_250);
   }
-  const selectors =
-    assistant === "chatgpt"
-      ? [
-          '[data-message-author-role="assistant"]:last-child',
-          '[data-testid="conversation-turn"]:last-child [data-message-author-role="assistant"]',
-        ]
-      : ['[data-testid="conversation-turn"]:last-child', '[class*="prose"]:last-of-type'];
-  for (const selector of selectors) {
+  return lastNonEmptyReply || null;
+}
+
+function assistantReplySelectors(assistant: ChatWebAssistant): string[] {
+  return assistant === "chatgpt"
+    ? [
+        '[data-message-author-role="assistant"]',
+        '[data-testid="conversation-turn"] [data-message-author-role="assistant"]',
+      ]
+    : ['[data-testid="conversation-turn"]', '[class*="prose"]'];
+}
+
+async function readLatestAssistantReplyText(
+  page: Page,
+  assistant: ChatWebAssistant,
+): Promise<string> {
+  for (const selector of assistantReplySelectors(assistant)) {
     const loc = page.locator(selector).last();
-    const text = (await loc.textContent().catch(() => null))?.trim();
+    const text = (
+      (await loc.innerText().catch(() => null)) ??
+      (await loc.textContent().catch(() => null)) ??
+      ""
+    ).trim();
     if (text) {
       return text;
     }
   }
-  return null;
+  return "";
+}
+
+async function countAssistantMessages(page: Page, assistant: ChatWebAssistant): Promise<number> {
+  for (const selector of assistantReplySelectors(assistant)) {
+    const count = await page
+      .locator(selector)
+      .count()
+      .catch(() => 0);
+    if (count > 0) {
+      return count;
+    }
+  }
+  return 0;
+}
+
+async function captureAssistantDebugSnapshot(
+  page: Page,
+  assistant: ChatWebAssistant,
+): Promise<string> {
+  const chunks: string[] = [];
+  for (const selector of assistantReplySelectors(assistant)) {
+    const loc = page.locator(selector).last();
+    const text = (
+      (await loc.innerText().catch(() => null)) ??
+      (await loc.textContent().catch(() => null)) ??
+      ""
+    ).trim();
+    chunks.push(`${selector} => ${text || "<empty>"}`);
+  }
+  const bodyText = (
+    await page
+      .locator("body")
+      .innerText()
+      .catch(() => "")
+  ).trim();
+  chunks.push(`body => ${(bodyText || "<empty>").slice(0, 2_000)}`);
+  return chunks.join(" | ");
 }
 
 async function writeChatInput(params: {
@@ -242,6 +307,12 @@ export async function sendChatWebMessage(params: {
 
   const response = await sendViaChatWeb({ session, message: params.message });
   if (debugEnabled) {
+    if (!response?.trim()) {
+      const snapshot = await captureAssistantDebugSnapshot(session.page, params.aiAssistant);
+      logChatWeb.info(
+        `[model-io] empty-response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} snapshot=${trimChatWebDebugText(snapshot)}`,
+      );
+    }
     logChatWeb.info(
       `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
     );
@@ -279,12 +350,20 @@ async function sendViaChatWeb(params: {
     selector: input,
     message: params.message,
   });
+  const previousAssistantCount = await countAssistantMessages(
+    params.session.page,
+    params.session.aiAssistant,
+  );
   await submitChatInput({
     page: params.session.page,
     assistant: params.session.aiAssistant,
   });
 
-  const response = await extractAssistantReply(params.session.page, params.session.aiAssistant);
+  const response = await extractAssistantReply(
+    params.session.page,
+    params.session.aiAssistant,
+    previousAssistantCount,
+  );
   const storagePath = getStoragePath(params.session.aiAssistant);
   await params.session.context.storageState({ path: storagePath });
   return response;
