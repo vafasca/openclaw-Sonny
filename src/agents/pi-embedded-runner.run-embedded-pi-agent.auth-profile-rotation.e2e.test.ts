@@ -169,6 +169,16 @@ const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawC
     },
   }) satisfies OpenClawConfig;
 
+const makeChatWebConfig = (opts: { apiKey?: string }): OpenClawConfig =>
+  ({
+    ...makeConfig({ apiKey: opts.apiKey }),
+    chatweb: {
+      enabled: true,
+      aiAssistant: "chatgpt",
+      browser: "edge",
+    },
+  }) satisfies OpenClawConfig;
+
 const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
   ({
     agents: {
@@ -1256,6 +1266,75 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         ).rejects.toMatchObject({ name: "FailoverError", reason: "auth" });
 
         expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
+      });
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+  });
+
+  it("keeps the provider API transport when chatweb is enabled and an API key is available", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockSingleSuccessfulAttempt();
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:chatweb-prefers-api",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeChatWebConfig({ apiKey: "sk-test" }),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:chatweb-prefers-api",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+        useChatWebTransport: false,
+        provider: "openai",
+        modelId: "mock-1",
+      });
+    });
+  });
+
+  it("falls back to chatweb transport when chatweb is enabled and no API key is available", async () => {
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+        const authPath = path.join(agentDir, "auth-profiles.json");
+        await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {}, usageStats: {} }));
+        mockSingleSuccessfulAttempt();
+
+        await runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:test:chatweb-no-key",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeChatWebConfig({ apiKey: "" }),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:chatweb-no-key",
+        });
+
+        expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+        expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+          useChatWebTransport: true,
+          provider: "openai",
+          modelId: "mock-1",
+        });
       });
     } finally {
       if (previousOpenAiKey === undefined) {

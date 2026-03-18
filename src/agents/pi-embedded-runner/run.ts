@@ -928,6 +928,9 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const hasProviderApiKey =
+            typeof (apiKeyInfo as ApiKeyInfo | null)?.apiKey === "string" &&
+            ((apiKeyInfo as ApiKeyInfo | null)?.apiKey?.length ?? 0) > 0;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -967,6 +970,7 @@ export async function runEmbeddedPiAgent(
             provider,
             modelId,
             model: applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+            useChatWebTransport: params.config?.chatweb?.enabled === true && !hasProviderApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,
