@@ -248,16 +248,49 @@ function extractJsonCandidate(raw: string): string | null {
 }
 
 export function parseChatWebResponse(raw: string): ChatWebResponseEnvelope | null {
-  const candidate = extractJsonCandidate(raw);
-  if (!candidate) {
-    return null;
+  function parseCandidate(candidateRaw: string): ChatWebResponseEnvelope | null {
+    const candidate = extractJsonCandidate(candidateRaw);
+    if (!candidate) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(candidate) as ChatWebResponseEnvelope;
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
   }
-  try {
-    const parsed = JSON.parse(candidate) as ChatWebResponseEnvelope;
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
+
+  function unwrapNestedEnvelope(
+    envelope: ChatWebResponseEnvelope,
+    depth: number,
+  ): ChatWebResponseEnvelope {
+    if (depth >= 2) {
+      return envelope;
+    }
+    const content = envelope.content;
+    if (
+      Array.isArray(content) &&
+      content.length === 1 &&
+      content[0]?.type === "text" &&
+      typeof content[0].text === "string"
+    ) {
+      const nested = parseCandidate(content[0].text);
+      if (nested) {
+        return unwrapNestedEnvelope(nested, depth + 1);
+      }
+    }
+    if (typeof envelope.text === "string") {
+      const nested = parseCandidate(envelope.text);
+      if (nested) {
+        return unwrapNestedEnvelope(nested, depth + 1);
+      }
+    }
+    return envelope;
   }
+
+  const parsed = parseCandidate(raw);
+  return parsed ? unwrapNestedEnvelope(parsed, 0) : null;
 }
 
 function normalizeToolCalls(value: ChatWebResponseEnvelope["toolCalls"]): ToolCall[] {

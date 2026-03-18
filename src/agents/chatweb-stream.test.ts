@@ -65,6 +65,31 @@ describe("chatweb-stream", () => {
     expect(parsed?.toolCalls?.[0]?.arguments).toEqual({ file_path: "a.txt" });
   });
 
+  it("unwraps nested JSON encoded inside a text block", () => {
+    const nested = JSON.stringify({
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "call_1", name: "write", arguments: { file_path: "a.txt" } },
+      ],
+    });
+    const parsed = parseChatWebResponse(
+      JSON.stringify({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: nested }],
+      }),
+    );
+
+    expect(parsed?.stopReason).toBe("toolUse");
+    expect(parsed?.content?.[0]).toEqual({
+      type: "toolCall",
+      id: "call_1",
+      name: "write",
+      arguments: { file_path: "a.txt" },
+    });
+  });
+
   it("emits toolUse when the browser assistant returns assistant content blocks", async () => {
     const streamFn = createChatWebStreamFn({
       aiAssistant: "chatgpt",
@@ -241,5 +266,62 @@ describe("chatweb-stream", () => {
     expect(message.model).toBe("chatweb-browser");
     expect(message.provider).toBe("chatweb");
     expect(message.content).toContainEqual({ type: "text", text: "ok" });
+  });
+
+  it("executes toolUse when retry returns JSON wrapped inside text", async () => {
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async ({ message }) => {
+          if (message.includes("Original task payload:")) {
+            const nested = JSON.stringify({
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_wrapped",
+                  name: "write",
+                  arguments: {
+                    file_path: "F:\\\\workspace_sonny\\\\index.html",
+                    content: "<html />",
+                  },
+                },
+              ],
+            });
+            return JSON.stringify({
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: nested }],
+            });
+          }
+          return "";
+        },
+      },
+    });
+
+    const model = {
+      id: "openrouter/arcee-ai/trinity-mini:free",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+
+    const message = await streamFn(model, { messages: [] }).result();
+
+    expect(message.stopReason).toBe("toolUse");
+    expect(message.content).toContainEqual({
+      type: "toolCall",
+      id: "call_wrapped",
+      name: "write",
+      arguments: { file_path: "F:\\\\workspace_sonny\\\\index.html", content: "<html />" },
+    });
   });
 });
