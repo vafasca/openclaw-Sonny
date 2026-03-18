@@ -152,6 +152,32 @@ async function extractAssistantReply(
   return null;
 }
 
+async function writeChatInput(params: {
+  page: Page;
+  selector: string;
+  message: string;
+}): Promise<void> {
+  const locator = params.page.locator(params.selector).first();
+  await locator.click();
+  const kind = await locator.evaluate((element) => {
+    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+      return "field";
+    }
+    if (element instanceof HTMLElement && element.isContentEditable) {
+      return "contenteditable";
+    }
+    return "unknown";
+  });
+
+  if (kind === "field") {
+    await locator.fill(params.message);
+    return;
+  }
+
+  await params.page.keyboard.press("ControlOrMeta+A");
+  await params.page.keyboard.insertText(params.message);
+}
+
 export async function sendChatWebMessage(params: {
   conversationId: string;
   message: string;
@@ -204,9 +230,11 @@ async function sendViaChatWeb(params: {
     throw new Error("Unable to find chat input in selected assistant page");
   }
 
-  await params.session.page.click(input);
-  await params.session.page.keyboard.press("ControlOrMeta+A");
-  await params.session.page.keyboard.type(params.message);
+  await writeChatInput({
+    page: params.session.page,
+    selector: input,
+    message: params.message,
+  });
   await params.session.page.keyboard.press("Enter");
 
   const response = await extractAssistantReply(params.session.page, params.session.aiAssistant);

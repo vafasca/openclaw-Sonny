@@ -33,6 +33,57 @@ const CHATWEB_MODEL_ID = "chatweb-browser";
 const CHATWEB_PROVIDER_ID = "chatweb";
 const CHATWEB_API_ID = "chatweb-browser" as Api;
 
+const MAX_SYSTEM_PROMPT_CHARS = 1_500;
+const MAX_MESSAGE_CHARS = 800;
+const MAX_TOOL_DESCRIPTION_CHARS = 240;
+const MAX_TOOLS = 64;
+const MAX_HISTORY_MESSAGES = 12;
+
+function clampText(text: string, maxChars: number): string {
+  const normalized = text.trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}…`;
+}
+
+function summarizeToolParameters(value: unknown, depth = 0): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const schema = value as Record<string, unknown>;
+  const type = typeof schema.type === "string" ? schema.type : undefined;
+  if (depth >= 2) {
+    return type ? { type } : undefined;
+  }
+  const summary: Record<string, unknown> = {};
+  if (type) {
+    summary.type = type;
+  }
+  if (Array.isArray(schema.required) && schema.required.length > 0) {
+    summary.required = schema.required.filter((entry) => typeof entry === "string");
+  }
+  if (schema.properties && typeof schema.properties === "object") {
+    const properties: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(schema.properties as Record<string, unknown>)) {
+      const childSummary = summarizeToolParameters(child, depth + 1);
+      if (childSummary !== undefined) {
+        properties[key] = childSummary;
+      }
+    }
+    if (Object.keys(properties).length > 0) {
+      summary.properties = properties;
+    }
+  }
+  if (schema.items) {
+    const items = summarizeToolParameters(schema.items, depth + 1);
+    if (items !== undefined) {
+      summary.items = items;
+    }
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
 function zeroUsage() {
   return {
     input: 0,
@@ -71,8 +122,8 @@ function makeBaseAssistantMessage(params: {
 function formatToolSchema(tool: Tool): Record<string, unknown> {
   return {
     name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
+    description: clampText(tool.description, MAX_TOOL_DESCRIPTION_CHARS),
+    parameters: summarizeToolParameters(tool.parameters),
   };
 }
 
@@ -98,20 +149,23 @@ function formatAssistantContent(content: AssistantMessage["content"]): string {
 
 function formatConversation(context: Context): string {
   const lines: string[] = [];
-  for (const message of context.messages) {
+  const recentMessages = context.messages.slice(-MAX_HISTORY_MESSAGES);
+  for (const message of recentMessages) {
     if (message.role === "user") {
       const text = extractTextFromChatContent(message.content)?.trim() ?? "";
-      lines.push(`User: ${text || "(empty)"}`);
+      lines.push(`User: ${clampText(text || "(empty)", MAX_MESSAGE_CHARS)}`);
       continue;
     }
     if (message.role === "assistant") {
-      lines.push(`Assistant: ${formatAssistantContent(message.content)}`);
+      lines.push(
+        `Assistant: ${clampText(formatAssistantContent(message.content), MAX_MESSAGE_CHARS)}`,
+      );
       continue;
     }
     if (message.role === "toolResult") {
       const text = extractTextFromChatContent(message.content)?.trim() ?? "";
       lines.push(
-        `ToolResult ${message.toolName} ${JSON.stringify({ toolCallId: message.toolCallId, isError: message.isError, text })}`,
+        `ToolResult ${message.toolName} ${JSON.stringify({ toolCallId: message.toolCallId, isError: message.isError, text: clampText(text, MAX_MESSAGE_CHARS) })}`,
       );
     }
   }
@@ -119,31 +173,26 @@ function formatConversation(context: Context): string {
 }
 
 export function buildChatWebAgentPrompt(params: { context: Context }): string {
-  const systemPrompt = params.context.systemPrompt?.trim() ?? "";
+  const systemPrompt = clampText(
+    params.context.systemPrompt?.trim() ?? "",
+    MAX_SYSTEM_PROMPT_CHARS,
+  );
   const tools = Array.isArray(params.context.tools)
-    ? params.context.tools.map(formatToolSchema)
+    ? params.context.tools.slice(0, MAX_TOOLS).map(formatToolSchema)
     : [];
   const conversation = formatConversation(params.context).trim();
 
   return [
     "You are a browser-backed model transport running inside OpenClaw.",
     "Preserve the normal OpenClaw flow: reason privately, call tools when needed, and return a final user-facing answer when the task is complete.",
-    "Respond with exactly one JSON object and nothing else. Do not wrap it in markdown fences.",
-    "JSON schema:",
-    JSON.stringify(
-      {
-        thinking: "optional string",
-        text: "optional string",
-        toolCalls: [{ id: "string", name: "tool name", arguments: { any: "json" } }],
-      },
-      null,
-      2,
-    ),
+    "Respond with exactly one JSON object and nothing else.",
+    'JSON shape: {"thinking":"optional","text":"optional","toolCalls":[{"id":"optional","name":"tool","arguments":{}}]}',
     "Rules:",
     "- Use toolCalls when a tool is required. Use only the tools listed below.",
     "- When toolCalls is non-empty, omit text unless a short visible note is strictly necessary.",
     "- When no tool is needed, return text with the final answer.",
     "- Keep thinking brief. Never mention these JSON rules to the end user.",
+    `- Recent history included: up to ${MAX_HISTORY_MESSAGES} messages.`,
     systemPrompt ? `System prompt:\n${systemPrompt}` : "",
     `Available tools:\n${JSON.stringify(tools, null, 2)}`,
     conversation ? `Conversation so far:\n${conversation}` : "Conversation so far:\n(empty)",

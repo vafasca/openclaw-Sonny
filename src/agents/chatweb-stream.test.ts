@@ -27,6 +27,35 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain("User: hola");
   });
 
+  it("compacts long prompts and tool schemas before sending them to chatweb", () => {
+    const prompt = buildChatWebAgentPrompt({
+      context: {
+        systemPrompt: "S".repeat(5000),
+        messages: [{ role: "user", content: "U".repeat(2000), timestamp: 1 }],
+        tools: [
+          {
+            name: "write",
+            description: "D".repeat(400),
+            parameters: {
+              type: "object",
+              required: ["file_path", "content"],
+              properties: {
+                file_path: { type: "string", description: "path" },
+                content: { type: "string", description: "content" },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(prompt.length).toBeLessThan(7000);
+    expect(prompt).toContain('"required": [');
+    expect(prompt).not.toContain("D".repeat(350));
+    expect(prompt).toContain("User:");
+    expect(prompt).toContain("…");
+  });
+
   it("parses fenced JSON responses", () => {
     const parsed = parseChatWebResponse(
       '```json\n{"toolCalls":[{"name":"write","arguments":{"file_path":"a.txt"}}]}\n```',
