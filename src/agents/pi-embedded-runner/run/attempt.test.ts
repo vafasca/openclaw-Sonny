@@ -151,7 +151,7 @@ describe("resolvePromptModeForSession", () => {
 
 describe("resolveModelIoDebugEnabled", () => {
   it("returns false by default", () => {
-    expect(resolveModelIoDebugEnabled({})).toBe(false);
+    expect(resolveModelIoDebugEnabled({}, ["node", "gateway"])).toBe(false);
   });
 
   it("accepts OPENCLAW_DEBUG_MODEL_IO truthy values", () => {
@@ -167,6 +167,12 @@ describe("resolveModelIoDebugEnabled", () => {
   it("ignores falsy values", () => {
     expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_MODEL_IO: "0" })).toBe(false);
     expect(resolveModelIoDebugEnabled({ OPENCLAW_DEBUG_PROMPT_IO: "false" })).toBe(false);
+  });
+
+  it("enables debug mode in --dev runs", () => {
+    expect(
+      resolveModelIoDebugEnabled({}, ["node", "scripts/run-node.mjs", "gateway", "--dev"]),
+    ).toBe(true);
   });
 });
 

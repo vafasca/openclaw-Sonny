@@ -191,7 +191,10 @@ function safeModelIoStringify(value: unknown): string {
   return String(value);
 }
 
-export function resolveModelIoDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+export function resolveModelIoDebugEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv,
+): boolean {
   for (const key of MODEL_IO_DEBUG_ENV_KEYS) {
     const raw = env[key];
     if (typeof raw !== "string") {
@@ -202,7 +205,37 @@ export function resolveModelIoDebugEnabled(env: NodeJS.ProcessEnv = process.env)
       return true;
     }
   }
-  return false;
+  return argv.includes("--dev");
+}
+
+function summarizeModelIoContext(context: unknown): string {
+  const source = context as {
+    system?: unknown;
+    messages?: Array<{ role?: unknown; content?: unknown }>;
+  };
+  const messages = Array.isArray(source?.messages) ? source.messages : [];
+  const lastUser = [...messages]
+    .toReversed()
+    .find((message) => typeof message?.role === "string" && message.role === "user");
+  const prompt =
+    typeof lastUser?.content === "string"
+      ? lastUser.content.trim()
+      : safeModelIoStringify(lastUser?.content).trim();
+  const system =
+    typeof source?.system === "string"
+      ? source.system.trim()
+      : source?.system
+        ? safeModelIoStringify(source.system)
+        : "";
+  return trimChatSections({ prompt, system });
+}
+
+function trimChatSections(params: { prompt: string; system: string }): string {
+  const sections = [
+    params.prompt ? `prompt=${truncateModelIoLog(params.prompt)}` : "prompt=<none>",
+    params.system ? `system=${truncateModelIoLog(params.system)}` : "system=<none>",
+  ];
+  return sections.join(" ");
 }
 
 function wrapStreamFnModelIoDebug(params: {
@@ -219,7 +252,7 @@ function wrapStreamFnModelIoDebug(params: {
   return (model, context, options) => {
     const modelLabel = `${params.provider}/${params.modelId}`;
     log.info(
-      `[model-io] request runId=${params.runId} sessionId=${params.sessionId} model=${modelLabel} context=${safeModelIoStringify(context)}`,
+      `[model-io] request runId=${params.runId} sessionId=${params.sessionId} model=${modelLabel} ${summarizeModelIoContext(context)} context=${safeModelIoStringify(context)}`,
     );
     const wrappedOptions = {
       ...options,
