@@ -3,6 +3,7 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -25,6 +26,31 @@ const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
 
 const activeLoginSessions = new Map<string, { browser: Browser; context: BrowserContext }>();
 const activeSessions = new Map<string, LiveSession>();
+
+const logChatWeb = createSubsystemLogger("gateway/chatweb");
+const CHATWEB_DEBUG_ENV_KEYS = ["OPENCLAW_DEBUG_MODEL_IO", "OPENCLAW_DEBUG_PROMPT_IO"] as const;
+const CHATWEB_DEBUG_MAX_CHARS = 16_000;
+
+function isChatWebIoDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  for (const key of CHATWEB_DEBUG_ENV_KEYS) {
+    const raw = env[key];
+    if (typeof raw !== "string") {
+      continue;
+    }
+    if (["1", "true", "yes", "on"].includes(raw.trim().toLowerCase())) {
+      return true;
+    }
+  }
+  return process.argv.includes("--dev");
+}
+
+function trimChatWebDebugText(text: string): string {
+  if (text.length <= CHATWEB_DEBUG_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, CHATWEB_DEBUG_MAX_CHARS)}
+...<truncated ${text.length - CHATWEB_DEBUG_MAX_CHARS} chars>`;
+}
 
 function getDataDir(): string {
   return path.join(resolveStateDir(process.env), "chatweb");
@@ -132,13 +158,25 @@ export async function sendChatWebMessage(params: {
   aiAssistant: ChatWebAssistant;
   browserType: ChatWebBrowser;
 }): Promise<string | null> {
+  const debugEnabled = isChatWebIoDebugEnabled(process.env);
+  if (debugEnabled) {
+    logChatWeb.info(
+      `[model-io] request mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} prompt=${trimChatWebDebugText(params.message)}`,
+    );
+  }
   const session = await ensureSession({
     conversationId: params.conversationId,
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
   });
 
-  return await sendViaChatWeb({ session, message: params.message });
+  const response = await sendViaChatWeb({ session, message: params.message });
+  if (debugEnabled) {
+    logChatWeb.info(
+      `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
+    );
+  }
+  return response;
 }
 
 async function sendViaChatWeb(params: {

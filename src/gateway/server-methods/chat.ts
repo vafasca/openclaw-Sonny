@@ -1291,6 +1291,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (cfg.chatweb?.enabled === true) {
+      context.logGateway.info(
+        `chat.send routing mode=chatweb runId=${clientRunId} sessionKey=${sessionKey}`,
+      );
       respond(true, { runId: clientRunId, status: "started" as const }, undefined, {
         runId: clientRunId,
       });
