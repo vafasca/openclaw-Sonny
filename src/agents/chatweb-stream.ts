@@ -2,7 +2,6 @@ import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type {
   Api,
   AssistantMessage,
-  AssistantMessageContent,
   AssistantMessageEventStream,
   Context,
   Model,
@@ -38,6 +37,8 @@ type ChatWebStreamDeps = {
   sendMessage?: typeof sendChatWebMessage;
   now?: () => number;
 };
+
+type AssistantContentBlock = AssistantMessage["content"][number];
 
 const CHATWEB_MODEL_ID = "chatweb-browser";
 const CHATWEB_PROVIDER_ID = "chatweb";
@@ -118,7 +119,7 @@ function formatMessageContent(message: Context["messages"][number]): unknown {
       content: message.content,
     };
   }
-  return message.content;
+  return null;
 }
 
 function formatConversation(context: Context): string {
@@ -240,11 +241,11 @@ function normalizeToolCalls(value: ChatWebResponseEnvelope["toolCalls"]): ToolCa
 
 function normalizeContentBlocks(
   value: ChatWebResponseEnvelope["content"],
-): AssistantMessageContent[] {
+): AssistantContentBlock[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const blocks: AssistantMessageContent[] = [];
+  const blocks: AssistantContentBlock[] = [];
   for (const [index, block] of value.entries()) {
     if (block?.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
       blocks.push({ type: "thinking", thinking: block.thinking.trim() });
