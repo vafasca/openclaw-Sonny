@@ -152,6 +152,7 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
     "Follow the provided system prompt, conversation history, and tool definitions as faithfully as possible.",
     "Do not rewrite or summarize the system prompt. Continue the conversation exactly as the model would.",
     "Return exactly one JSON object and nothing else. Do not wrap it in markdown fences.",
+    "Start with { and end with }. Do not include any preamble, postscript, or markdown.",
     "Return the next assistant turn using OpenClaw-style content blocks.",
     "Supported response schema:",
     JSON.stringify(
@@ -182,6 +183,31 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function buildRepairPrompt(rawResponse: string): string {
+  return [
+    "Your previous message was not machine-parseable.",
+    "Convert that previous answer into exactly one valid JSON object only.",
+    "Do not include markdown fences. Do not include explanations.",
+    "Start with { and end with }.",
+    "Allowed schema:",
+    JSON.stringify(
+      {
+        role: "assistant",
+        stopReason: "stop | toolUse",
+        content: [
+          { type: "thinking", thinking: "private reasoning" },
+          { type: "toolCall", id: "call id", name: "tool name", arguments: { any: "json" } },
+          { type: "text", text: "final user-visible response" },
+        ],
+      },
+      null,
+      2,
+    ),
+    "If your previous answer included file contents, include them as toolCall arguments/content faithfully.",
+    `Previous raw answer:\n${rawResponse.trim() || "<empty>"}`,
+  ].join("\n\n");
 }
 
 function extractJsonCandidate(raw: string): string | null {
@@ -304,14 +330,29 @@ export function createChatWebStreamFn(params: {
       try {
         const prompt = buildChatWebAgentPrompt({ context });
         const conversationId = options?.sessionId?.trim() || `${model.provider}:${model.id}`;
-        const rawResponse =
+        const firstRawResponse =
           (await sendMessage({
             conversationId,
             message: prompt,
             aiAssistant: params.aiAssistant,
             browserType: params.browserType,
           })) ?? "";
-        const parsed = parseChatWebResponse(rawResponse);
+        let rawResponse = firstRawResponse;
+        let parsed = parseChatWebResponse(rawResponse);
+        if (!parsed) {
+          const repairPrompt = buildRepairPrompt(firstRawResponse);
+          const repairedRawResponse =
+            (await sendMessage({
+              conversationId,
+              message: repairPrompt,
+              aiAssistant: params.aiAssistant,
+              browserType: params.browserType,
+            })) ?? "";
+          if (repairedRawResponse.trim()) {
+            rawResponse = repairedRawResponse;
+            parsed = parseChatWebResponse(repairedRawResponse);
+          }
+        }
         const message = makeBaseAssistantMessage({
           now: now(),
           model: model.id || CHATWEB_MODEL_ID,

@@ -53,6 +53,7 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain('"file_path"');
     expect(prompt).toContain('"description": "absolute path"');
     expect(prompt).toContain('"stopReason": "stop | toolUse"');
+    expect(prompt).toContain("Start with { and end with }.");
   });
 
   it("parses fenced JSON responses", () => {
@@ -117,9 +118,7 @@ describe("chatweb-stream", () => {
     const streamFn = createChatWebStreamFn({
       aiAssistant: "chatgpt",
       browserType: "chrome",
-      deps: {
-        sendMessage: async () => "respuesta final",
-      },
+      deps: { sendMessage: async () => "respuesta final" },
     });
 
     const model = {
@@ -139,5 +138,63 @@ describe("chatweb-stream", () => {
 
     expect(message.stopReason).toBe("stop");
     expect(message.content).toContainEqual({ type: "text", text: "respuesta final" });
+  });
+
+  it("retries once with a repair prompt when the first browser response is not JSON", async () => {
+    const prompts: string[] = [];
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async ({ message }) => {
+          prompts.push(message);
+          if (prompts.length === 1) {
+            return "Te dejo los archivos HTML, CSS y JS directamente...";
+          }
+          return JSON.stringify({
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "write",
+                arguments: {
+                  file_path: "F:\\\\workspace_sonny\\\\index.html",
+                  content: "<html />",
+                },
+              },
+            ],
+          });
+        },
+      },
+    });
+
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+
+    const message = await streamFn(model, { messages: [] }).result();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain(
+      "Convert that previous answer into exactly one valid JSON object only.",
+    );
+    expect(message.stopReason).toBe("toolUse");
+    expect(message.content).toContainEqual({
+      type: "toolCall",
+      id: "call_1",
+      name: "write",
+      arguments: { file_path: "F:\\\\workspace_sonny\\\\index.html", content: "<html />" },
+    });
   });
 });
