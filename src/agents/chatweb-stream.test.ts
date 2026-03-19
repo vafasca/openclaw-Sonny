@@ -157,6 +157,59 @@ function run() {
     });
   });
 
+  it("normalizes single-bracket FILE blocks so placeholder substitution still works", () => {
+    const raw = `{
+      "role":"assistant",
+      "stopReason":"toolUse",
+      "content":[
+        {
+          "type":"toolCall",
+          "id":"call_1",
+          "name":"write",
+          "arguments":{"file_path":"F:\\\\workspace_sonny\\\\index.html","content":"<<FILE:index_html>>"}
+        }
+      ]
+    }
+
+<FILE:index_html>
+<h1>Hola</h1>
+<END_FILE:index_html>`;
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      file_path: "F:\\workspace_sonny\\index.html",
+      content: "<h1>Hola</h1>",
+    });
+  });
+
+  it("sanitizes newlines accidentally inserted inside css url() strings", () => {
+    const raw = `{
+      "role":"assistant",
+      "stopReason":"toolUse",
+      "content":[
+        {
+          "type":"toolCall",
+          "id":"call_css",
+          "name":"write",
+          "arguments":{"file_path":"F:\\\\workspace_sonny\\\\styles.css","content":"<<FILE:styles_css>>"}
+        }
+      ]
+    }
+
+<<FILE:styles_css>>
+body { background: url('https://i.imgur.com/5WQZ6Vn.png
+'); }
+<<END_FILE:styles_css>>`;
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      file_path: "F:\\workspace_sonny\\styles.css",
+      content: "body { background: url('https://i.imgur.com/5WQZ6Vn.png'); }",
+    });
+  });
+
   it("repairs malformed placeholder newlines and single-backslash windows paths", () => {
     const raw = `{
       "role":"assistant",

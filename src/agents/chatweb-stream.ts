@@ -433,18 +433,24 @@ function normalizeRawChatWebDialect(raw: string): string {
     raw
       .replace(/<FILE:([^\n>]+)\n>/g, "<<FILE:$1>>")
       .replace(/<<FILE:([^\n>]+)\n>>/g, "<<FILE:$1>>")
-      .replace(/<END_FILE:([^\n>]+)\n>/g, "<<END_FILE:$1>>"),
+      .replace(/(?<!<)<FILE:([^>\n]+)>(?!>)/g, "<<FILE:$1>>")
+      .replace(/<END_FILE:([^\n>]+)\n>/g, "<<END_FILE:$1>>")
+      .replace(/(?<!<)<END_FILE:([^>\n]+)>(?!>)/g, "<<END_FILE:$1>>"),
   );
+}
+
+function sanitizeFileBlockContent(content: string): string {
+  return content.replace(/url\((['"])([^'")]*?)\n\1\)/g, "url($1$2$1)");
 }
 
 function extractFileBlocks(raw: string): FileBlockMap {
   const blocks: FileBlockMap = new Map();
-  const regex = /<{1,2}FILE:([a-zA-Z0-9_.-]+)>{1,2}\s*\n([\s\S]*?)\n<{1,2}END_FILE:\1>{1,2}/g;
+  const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)\n<<END_FILE:\1>>/g;
   for (const match of raw.matchAll(regex)) {
     const id = match[1]?.trim();
     const content = match[2] ?? "";
     if (id) {
-      blocks.set(`<<FILE:${id}>>`, content);
+      blocks.set(id, sanitizeFileBlockContent(content.trim()));
     }
   }
   return blocks;
@@ -453,7 +459,12 @@ function extractFileBlocks(raw: string): FileBlockMap {
 function applyFileBlocksToValue(value: unknown, blocks: FileBlockMap): unknown {
   if (typeof value === "string") {
     const normalized = normalizePlaceholderToken(value);
-    return blocks.get(value) ?? blocks.get(normalized) ?? value;
+    const placeholderMatch = normalized.match(/^<<FILE:([a-zA-Z0-9_.-]+)>>$/);
+    if (!placeholderMatch) {
+      return value;
+    }
+    const id = placeholderMatch[1];
+    return blocks.get(id) ?? value;
   }
   if (Array.isArray(value)) {
     return value.map((entry) => applyFileBlocksToValue(entry, blocks));
