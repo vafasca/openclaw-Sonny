@@ -55,6 +55,8 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain('"description": "absolute path"');
     expect(prompt).toContain('"stopReason": "stop | toolUse"');
     expect(prompt).toContain("Start with { and end with }.");
+    expect(prompt).toContain("CRITICAL RULE — FILE OPERATIONS:");
+    expect(prompt).toContain("<<FILE:index_html>>");
   });
 
   it("parses fenced JSON responses", () => {
@@ -88,6 +90,36 @@ describe("chatweb-stream", () => {
       id: "call_1",
       name: "write",
       arguments: { file_path: "a.txt" },
+    });
+  });
+
+  it("replaces file placeholders using delimited file blocks outside JSON", () => {
+    const raw = `{
+      "role":"assistant",
+      "stopReason":"toolUse",
+      "content":[
+        {
+          "type":"toolCall",
+          "id":"call_1",
+          "name":"write",
+          "arguments":{"file_path":"F:\\\\workspace_sonny\\\\index.html","content":"<<FILE:index_html>>"}
+        }
+      ]
+    }
+
+<<FILE:index_html>>
+<!DOCTYPE html>
+<html lang="es">
+  <body>ok</body>
+</html>
+<<END_FILE:index_html>>`;
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      file_path: "F:\\workspace_sonny\\index.html",
+      content: '<!DOCTYPE html>\n<html lang="es">\n  <body>ok</body>\n</html>',
     });
   });
 
@@ -336,6 +368,70 @@ describe("chatweb-stream", () => {
     expect(message.content).toContainEqual({
       type: "toolCall",
       id: "call_wrapped",
+      name: "write",
+      arguments: { file_path: "F:\\\\workspace_sonny\\\\index.html", content: "<html />" },
+    });
+  });
+
+  it("retries with toolUse instructions when file task returns stop text without toolCalls", async () => {
+    const prompts: string[] = [];
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async ({ message }) => {
+          prompts.push(message);
+          if (prompts.length === 1) {
+            return JSON.stringify({
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "No pude escribir archivos." }],
+            });
+          }
+          return JSON.stringify({
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_retry",
+                name: "write",
+                arguments: {
+                  file_path: "F:\\\\workspace_sonny\\\\index.html",
+                  content: "<html />",
+                },
+              },
+            ],
+          });
+        },
+      },
+    });
+
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+    const context: Context = {
+      messages: [{ role: "user", content: "crea y guarda un archivo html", timestamp: 1 }],
+      tools: [{ name: "write", description: "Write file", parameters: Type.Object({}) }],
+    };
+
+    const message = await streamFn(model, context).result();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('You MUST return toolCall blocks using the "write" tool');
+    expect(message.stopReason).toBe("toolUse");
+    expect(message.content).toContainEqual({
+      type: "toolCall",
+      id: "call_retry",
       name: "write",
       arguments: { file_path: "F:\\\\workspace_sonny\\\\index.html", content: "<html />" },
     });

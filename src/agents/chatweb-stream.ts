@@ -39,6 +39,8 @@ type ParseChatWebResponseResult = {
   repaired?: boolean;
 };
 
+type FileBlockMap = Map<string, string>;
+
 type ChatWebStreamDeps = {
   sendMessage?: typeof sendChatWebMessage;
   now?: () => number;
@@ -190,6 +192,19 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
     "- When returning a final answer, include a text block and set stopReason to stop.",
     "- Thinking blocks are optional and private. Text blocks are user-visible.",
     "- Tool call arguments must be valid JSON. Escape backslashes in Windows paths and escape quotes inside file contents.",
+    "CRITICAL RULE — FILE OPERATIONS:",
+    "- When the task involves creating, writing, or saving files, you MUST return toolCall blocks using the write tool.",
+    '- For file operations, stopReason MUST be "toolUse".',
+    "- Do NOT return file contents in a text response for file operations.",
+    "- Do NOT claim you cannot write files. You can and must use toolCall.",
+    "- If a task requires 3 files, return 3 separate toolCall blocks.",
+    "OPTIONAL SAFE FILE-CONTENT FORMAT (recommended for long HTML/CSS/JS):",
+    '- In toolCall arguments, set content to a placeholder like "<<FILE:index_html>>".',
+    "- After the JSON object, append file blocks in this exact format:",
+    "<<FILE:index_html>",
+    "<!DOCTYPE html>...",
+    "<<END_FILE:index_html>>",
+    "The parser will replace placeholder content values with these file blocks.",
     systemPrompt
       ? `System message:\n${JSON.stringify({ role: "system", content: systemPrompt }, null, 2)}`
       : 'System message:\n{"role":"system","content":""}',
@@ -242,6 +257,22 @@ function buildEmptyRetryPrompt(originalPrompt: string): string {
     "Start with { and end with }.",
     "Original task payload:",
     originalPrompt,
+  ].join("\n\n");
+}
+
+function buildToolUseRetryPrompt(params: {
+  originalPrompt: string;
+  previousResponse: string;
+}): string {
+  return [
+    'Your previous response used stopReason:"stop" without required file tool calls.',
+    "This task requires file creation/writes.",
+    'You MUST return toolCall blocks using the "write" tool and set stopReason to "toolUse".',
+    "Do NOT put file contents in a text response.",
+    "Do NOT ask the user to copy/paste manually.",
+    "Original task payload:",
+    params.originalPrompt,
+    `Previous raw answer:\n${params.previousResponse.trim() || "<empty>"}`,
   ].join("\n\n");
 }
 
@@ -305,36 +336,110 @@ function escapeLikelyUnescapedQuotes(candidate: string): string {
   return result;
 }
 
-export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseResult {
-  function parseCandidate(candidateRaw: string): ParseChatWebResponseResult {
-    const candidate = extractJsonCandidate(candidateRaw);
-    if (!candidate) {
-      return { response: null, error: "No JSON object found in assistant response." };
-    }
-    try {
-      const parsed = JSON.parse(candidate) as ChatWebResponseEnvelope;
-      return parsed && typeof parsed === "object"
-        ? { response: parsed }
-        : { response: null, error: "Parsed value was not an object." };
-    } catch (error) {
-      const repairedCandidate = escapeLikelyUnescapedQuotes(candidate);
-      if (repairedCandidate !== candidate) {
-        try {
-          const repaired = JSON.parse(repairedCandidate) as ChatWebResponseEnvelope;
-          if (repaired && typeof repaired === "object") {
-            return { response: repaired, repaired: true };
-          }
-        } catch {
-          // fall through to original parse error
-        }
-      }
-      return {
-        response: null,
-        error: error instanceof Error ? error.message : String(error),
-      };
+function fallbackJsonRepair(candidate: string): string {
+  return candidate
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
+}
+
+function extractFileBlocks(raw: string): FileBlockMap {
+  const blocks: FileBlockMap = new Map();
+  const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)\n<<END_FILE:\1>>/g;
+  for (const match of raw.matchAll(regex)) {
+    const id = match[1]?.trim();
+    const content = match[2] ?? "";
+    if (id) {
+      blocks.set(`<<FILE:${id}>>`, content);
     }
   }
+  return blocks;
+}
 
+function applyFileBlocksToValue(value: unknown, blocks: FileBlockMap): unknown {
+  if (typeof value === "string") {
+    return blocks.get(value) ?? value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => applyFileBlocksToValue(entry, blocks));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, applyFileBlocksToValue(entry, blocks)]),
+    );
+  }
+  return value;
+}
+
+function applyFileBlocksToEnvelope(
+  envelope: ChatWebResponseEnvelope,
+  blocks: FileBlockMap,
+): ChatWebResponseEnvelope {
+  if (blocks.size === 0) {
+    return envelope;
+  }
+  return {
+    ...envelope,
+    content: Array.isArray(envelope.content)
+      ? envelope.content.map((block) =>
+          block?.type === "toolCall"
+            ? {
+                ...block,
+                arguments: applyFileBlocksToValue(block.arguments, blocks) as Record<
+                  string,
+                  unknown
+                >,
+              }
+            : block,
+        )
+      : envelope.content,
+    toolCalls: Array.isArray(envelope.toolCalls)
+      ? envelope.toolCalls.map((toolCall) => ({
+          ...toolCall,
+          arguments: applyFileBlocksToValue(toolCall.arguments, blocks) as Record<string, unknown>,
+        }))
+      : envelope.toolCalls,
+  };
+}
+
+function parseCandidate(candidateRaw: string): ParseChatWebResponseResult {
+  const candidate = extractJsonCandidate(candidateRaw);
+  if (!candidate) {
+    return { response: null, error: "No JSON object found in assistant response." };
+  }
+  try {
+    const parsed = JSON.parse(candidate) as ChatWebResponseEnvelope;
+    return parsed && typeof parsed === "object"
+      ? { response: parsed }
+      : { response: null, error: "Parsed value was not an object." };
+  } catch (error) {
+    try {
+      const repaired = JSON.parse(fallbackJsonRepair(candidate)) as ChatWebResponseEnvelope;
+      if (repaired && typeof repaired === "object") {
+        return { response: repaired, repaired: true };
+      }
+    } catch {
+      // continue to heuristic repair fallback
+    }
+    const repairedCandidate = escapeLikelyUnescapedQuotes(candidate);
+    if (repairedCandidate !== candidate) {
+      try {
+        const repaired = JSON.parse(repairedCandidate) as ChatWebResponseEnvelope;
+        if (repaired && typeof repaired === "object") {
+          return { response: repaired, repaired: true };
+        }
+      } catch {
+        // fall through to original parse error
+      }
+    }
+    return {
+      response: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseResult {
   function unwrapNestedEnvelope(
     envelope: ChatWebResponseEnvelope,
     depth: number,
@@ -369,7 +474,14 @@ export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseR
   if (!parsed.response) {
     return parsed;
   }
-  return unwrapNestedEnvelope(parsed.response, 0);
+  const unwrapped = unwrapNestedEnvelope(parsed.response, 0);
+  if (!unwrapped.response) {
+    return unwrapped;
+  }
+  return {
+    ...unwrapped,
+    response: applyFileBlocksToEnvelope(unwrapped.response, extractFileBlocks(raw)),
+  };
 }
 
 export function parseChatWebResponse(raw: string): ChatWebResponseEnvelope | null {
@@ -439,6 +551,24 @@ function normalizeContentBlocks(
   return blocks;
 }
 
+function messageLikelyNeedsFileTools(context: Context): boolean {
+  const hasWriteTool = Array.isArray(context.tools)
+    ? context.tools.some((tool) => tool?.name === "write")
+    : false;
+  if (!hasWriteTool) {
+    return false;
+  }
+  const lastUserMessage = [...context.messages]
+    .toReversed()
+    .find((message) => message.role === "user");
+  if (!lastUserMessage || typeof lastUserMessage.content !== "string") {
+    return false;
+  }
+  return /(write|save|create|archivo|guardar|guarda|crear|file|files)/i.test(
+    lastUserMessage.content,
+  );
+}
+
 export function createChatWebStreamFn(params: {
   aiAssistant: ChatWebAssistant;
   browserType: ChatWebBrowser;
@@ -484,6 +614,31 @@ export function createChatWebStreamFn(params: {
           if (repairedRawResponse.trim()) {
             rawResponse = repairedRawResponse;
             parsedResult = parseChatWebResponseDetailed(repairedRawResponse);
+          }
+        }
+        if (parsedResult.response) {
+          const normalized = normalizeContentBlocks(parsedResult.response.content);
+          const hasToolCall = normalized.some((block) => block.type === "toolCall");
+          if (
+            !hasToolCall &&
+            parsedResult.response.stopReason === "stop" &&
+            messageLikelyNeedsFileTools(context)
+          ) {
+            const toolUseRetryPrompt = buildToolUseRetryPrompt({
+              originalPrompt: prompt,
+              previousResponse: rawResponse,
+            });
+            const toolUseRetryRaw =
+              (await sendMessage({
+                conversationId,
+                message: toolUseRetryPrompt,
+                aiAssistant: params.aiAssistant,
+                browserType: params.browserType,
+              })) ?? "";
+            if (toolUseRetryRaw.trim()) {
+              rawResponse = toolUseRetryRaw;
+              parsedResult = parseChatWebResponseDetailed(toolUseRetryRaw);
+            }
           }
         }
         const parsed = parsedResult.response;
