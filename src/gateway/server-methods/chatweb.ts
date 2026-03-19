@@ -16,6 +16,7 @@ type LiveSession = {
   page: Page;
   aiAssistant: ChatWebAssistant;
   browserType: ChatWebBrowser;
+  activeConversationId: string | null;
 };
 
 const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
@@ -24,6 +25,7 @@ const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
 };
 
 const activeLoginSessions = new Map<string, { browser: Browser; context: BrowserContext }>();
+const activeSessions = new Map<string, LiveSession>();
 
 const logChatWeb = createSubsystemLogger("gateway/chatweb");
 const CHATWEB_DEBUG_ENV_KEYS = ["OPENCLAW_DEBUG_MODEL_IO", "OPENCLAW_DEBUG_PROMPT_IO"] as const;
@@ -78,10 +80,15 @@ function looksLoggedIn(storagePath: string): boolean {
   }
 }
 
-async function createSession(params: {
+async function ensureSession(params: {
   browserType: ChatWebBrowser;
   aiAssistant: ChatWebAssistant;
 }): Promise<LiveSession> {
+  const sessionKey = `${params.aiAssistant}-${params.browserType}`;
+  const existing = activeSessions.get(sessionKey);
+  if (existing && existing.browser.isConnected()) {
+    return existing;
+  }
   const storagePath = getStoragePath(params.aiAssistant);
   if (!fs.existsSync(storagePath)) {
     throw new Error("No saved login session. Start chatweb.login.start first.");
@@ -101,13 +108,16 @@ async function createSession(params: {
     timeout: 60_000,
   });
   await page.waitForTimeout(1_500);
-  return {
+  const session: LiveSession = {
     browser,
     context,
     page,
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
+    activeConversationId: null,
   };
+  activeSessions.set(sessionKey, session);
+  return session;
 }
 
 async function extractAssistantReply(
@@ -289,37 +299,44 @@ export async function sendChatWebMessage(params: {
       `[model-io] request mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} prompt=${trimChatWebDebugText(params.message)}`,
     );
   }
-  const session = await createSession({
+  const session = await ensureSession({
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
   });
 
-  try {
-    const response = await sendViaChatWeb({ session, message: params.message });
-    if (debugEnabled) {
-      if (!response?.trim()) {
-        const snapshot = await captureAssistantDebugSnapshot(session.page, params.aiAssistant);
-        logChatWeb.info(
-          `[model-io] empty-response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} snapshot=${trimChatWebDebugText(snapshot)}`,
-        );
-      }
+  const response = await sendViaChatWeb({
+    session,
+    message: params.message,
+    conversationId: params.conversationId,
+  });
+  if (debugEnabled) {
+    if (!response?.trim()) {
+      const snapshot = await captureAssistantDebugSnapshot(session.page, params.aiAssistant);
       logChatWeb.info(
-        `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
+        `[model-io] empty-response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} snapshot=${trimChatWebDebugText(snapshot)}`,
       );
     }
-    return response;
-  } finally {
-    await session.context
-      .storageState({ path: getStoragePath(params.aiAssistant) })
-      .catch(() => {});
-    await session.browser.close().catch(() => {});
+    logChatWeb.info(
+      `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
+    );
   }
+  await session.context.storageState({ path: getStoragePath(params.aiAssistant) }).catch(() => {});
+  return response;
 }
 
 async function sendViaChatWeb(params: {
   session: LiveSession;
   message: string;
+  conversationId: string;
 }): Promise<string | null> {
+  if (params.session.activeConversationId !== params.conversationId) {
+    await params.session.page.goto(ASSISTANT_URLS[params.session.aiAssistant], {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await params.session.page.waitForTimeout(900);
+    params.session.activeConversationId = params.conversationId;
+  }
   const inputSelectors =
     params.session.aiAssistant === "chatgpt"
       ? ["#prompt-textarea", 'textarea[placeholder*="Message"]', 'div[contenteditable="true"]']

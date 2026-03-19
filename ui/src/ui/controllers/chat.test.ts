@@ -545,62 +545,6 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
-  it("resets the session before each non-reset chat prompt", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.reset") {
-        return { ok: true };
-      }
-      if (method === "chat.send") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      sessionKey: "main",
-    });
-
-    const result = await sendChatMessage(state, "hola");
-
-    expect(result).toBeTruthy();
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.reset", { key: "main" });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "main",
-        message: "hola",
-      }),
-    );
-  });
-
-  it("does not pre-reset when sending explicit /new command", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "chat.send") {
-        return { ok: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-      sessionKey: "main",
-    });
-
-    const result = await sendChatMessage(state, "/new");
-
-    expect(result).toBeTruthy();
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "main",
-        message: "/new",
-      }),
-    );
-  });
-
   it("formats structured non-auth connect failures for chat send", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({

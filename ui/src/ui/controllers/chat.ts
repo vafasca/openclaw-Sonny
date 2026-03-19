@@ -52,11 +52,6 @@ export type ChatEventPayload = {
   errorMessage?: string;
 };
 
-function isSessionResetDirective(message: string): boolean {
-  const normalized = message.trim().toLowerCase();
-  return normalized === "/new" || normalized === "/reset";
-}
-
 function maybeResetToolStream(state: ChatState) {
   const toolHost = state as ChatState & Partial<Parameters<typeof resetToolStream>[0]>;
   if (
@@ -220,11 +215,6 @@ export async function sendChatMessage(
     : undefined;
 
   try {
-    if (!isSessionResetDirective(msg)) {
-      await state.client.request("sessions.reset", {
-        key: state.sessionKey,
-      });
-    }
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
