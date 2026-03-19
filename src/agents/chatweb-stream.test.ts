@@ -56,6 +56,9 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain('"stopReason": "stop | toolUse"');
     expect(prompt).toContain("Start with { and end with }.");
     expect(prompt).toContain("CRITICAL RULE — FILE OPERATIONS:");
+    expect(prompt).toContain(
+      "REQUIRED FILE-CONTENT FORMAT (MANDATORY for HTML/CSS/JS file writes):",
+    );
     expect(prompt).toContain("<<FILE:index_html>>");
   });
 
@@ -262,6 +265,7 @@ describe("chatweb-stream", () => {
       "Convert that previous answer into exactly one valid JSON object only.",
     );
     expect(prompts[1]).toContain("Parse error:");
+    expect(prompts[1]).toContain("use REQUIRED file placeholders instead of inline code strings.");
     expect(message.stopReason).toBe("toolUse");
     expect(message.model).toBe("chatweb-browser");
     expect(message.provider).toBe("chatweb");

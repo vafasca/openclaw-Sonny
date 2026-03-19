@@ -198,12 +198,13 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
     "- Do NOT return file contents in a text response for file operations.",
     "- Do NOT claim you cannot write files. You can and must use toolCall.",
     "- If a task requires 3 files, return 3 separate toolCall blocks.",
-    "OPTIONAL SAFE FILE-CONTENT FORMAT (recommended for long HTML/CSS/JS):",
-    '- In toolCall arguments, set content to a placeholder like "<<FILE:index_html>>".',
+    "REQUIRED FILE-CONTENT FORMAT (MANDATORY for HTML/CSS/JS file writes):",
+    '- In toolCall arguments, you MUST set content to a placeholder like "<<FILE:index_html>>".',
     "- After the JSON object, append file blocks in this exact format:",
     "<<FILE:index_html>",
     "<!DOCTYPE html>...",
     "<<END_FILE:index_html>>",
+    "Do NOT put HTML/CSS/JS source directly inside JSON string content fields.",
     "The parser will replace placeholder content values with these file blocks.",
     systemPrompt
       ? `System message:\n${JSON.stringify({ role: "system", content: systemPrompt }, null, 2)}`
@@ -230,6 +231,12 @@ function buildRepairPrompt(rawResponse: string, parseError?: string): string {
     "Do not include markdown fences. Do not include explanations.",
     "Start with { and end with }.",
     errorHint,
+    "If HTML/CSS/JS content caused quoting errors, use REQUIRED file placeholders instead of inline code strings.",
+    'Set toolCall arguments.content to placeholders like "<<FILE:index_html>>", then append blocks after JSON.',
+    "REQUIRED block format:",
+    "<<FILE:index_html>>",
+    "<!DOCTYPE html>...",
+    "<<END_FILE:index_html>>",
     "Allowed schema:",
     JSON.stringify(
       {
