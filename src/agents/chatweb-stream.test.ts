@@ -59,6 +59,8 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain(
       "REQUIRED FILE-CONTENT FORMAT (MANDATORY for HTML/CSS/JS file writes):",
     );
+    expect(prompt).toContain('{"content":"<<FILE:index_html>>"}');
+    expect(prompt).toContain("escape backslashes (example: F:\\\\workspace_sonny\\\\index.html)");
     expect(prompt).toContain("<<FILE:index_html>>");
   });
 
@@ -106,6 +108,37 @@ describe("chatweb-stream", () => {
           "id":"call_1",
           "name":"write",
           "arguments":{"file_path":"F:\\\\workspace_sonny\\\\index.html","content":"<<FILE:index_html>>"}
+        }
+      ]
+    }
+
+<<FILE:index_html>>
+<!DOCTYPE html>
+<html lang="es">
+  <body>ok</body>
+</html>
+<<END_FILE:index_html>>`;
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      file_path: "F:\\workspace_sonny\\index.html",
+      content: '<!DOCTYPE html>\n<html lang="es">\n  <body>ok</body>\n</html>',
+    });
+  });
+
+  it("repairs malformed placeholder newlines and single-backslash windows paths", () => {
+    const raw = `{
+      "role":"assistant",
+      "stopReason":"toolUse",
+      "content":[
+        {
+          "type":"toolCall",
+          "id":"call_1",
+          "name":"write",
+          "arguments":{"file_path":"F:\\workspace_sonny\\index.html","content":"<FILE:index_html
+>"}
         }
       ]
     }

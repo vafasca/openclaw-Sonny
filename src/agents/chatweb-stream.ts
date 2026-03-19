@@ -200,6 +200,9 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
     "- If a task requires 3 files, return 3 separate toolCall blocks.",
     "REQUIRED FILE-CONTENT FORMAT (MANDATORY for HTML/CSS/JS file writes):",
     '- In toolCall arguments, you MUST set content to a placeholder like "<<FILE:index_html>>".',
+    '  Example JSON field (one line only): {"content":"<<FILE:index_html>>"}',
+    "- Placeholder format is EXACT and REQUIRED: must start with << and end with >> with no line breaks.",
+    "- For Windows paths in JSON, escape backslashes (example: F:\\\\workspace_sonny\\\\index.html).",
     "- After the JSON object, append file blocks in this exact format:",
     "<<FILE:index_html>",
     "<!DOCTYPE html>...",
@@ -350,6 +353,49 @@ function fallbackJsonRepair(candidate: string): string {
     .replace(/[‘’]/g, "'");
 }
 
+function normalizeMalformedFilePlaceholders(candidate: string): string {
+  return candidate
+    .replace(/<{1,2}FILE:([a-zA-Z0-9_.-]+)\s*[\r\n]+\s*>{1,2}/g, "<<FILE:$1>>")
+    .replace(/<{1,2}END_FILE:([a-zA-Z0-9_.-]+)\s*[\r\n]+\s*>{1,2}/g, "<<END_FILE:$1>>")
+    .replace(/<FILE:([a-zA-Z0-9_.-]+)>/g, "<<FILE:$1>>")
+    .replace(/<END_FILE:([a-zA-Z0-9_.-]+)>/g, "<<END_FILE:$1>>");
+}
+
+function normalizeLikelyWindowsPathEscapes(candidate: string): string {
+  let result = "";
+  let insideString = false;
+  let escaped = false;
+  for (let i = 0; i < candidate.length; i += 1) {
+    const char = candidate[i];
+    if (char === '"' && !escaped) {
+      insideString = !insideString;
+      result += char;
+      continue;
+    }
+    if (insideString && char === "\\") {
+      const next = candidate[i + 1] ?? "";
+      const validEscape = ['"', "\\", "/", "b", "f", "n", "r", "t", "u"].includes(next);
+      if (!validEscape) {
+        result += "\\\\";
+        escaped = false;
+        continue;
+      }
+      escaped = !escaped;
+      result += char;
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+    }
+    result += char;
+  }
+  return result;
+}
+
+function normalizePlaceholderToken(value: string): string {
+  return value.replace(/\s+/g, "").replace(/^<+FILE:([a-zA-Z0-9_.-]+)>+$/i, "<<FILE:$1>>");
+}
+
 function extractFileBlocks(raw: string): FileBlockMap {
   const blocks: FileBlockMap = new Map();
   const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)\n<<END_FILE:\1>>/g;
@@ -365,7 +411,8 @@ function extractFileBlocks(raw: string): FileBlockMap {
 
 function applyFileBlocksToValue(value: unknown, blocks: FileBlockMap): unknown {
   if (typeof value === "string") {
-    return blocks.get(value) ?? value;
+    const normalized = normalizePlaceholderToken(value);
+    return blocks.get(value) ?? blocks.get(normalized) ?? value;
   }
   if (Array.isArray(value)) {
     return value.map((entry) => applyFileBlocksToValue(entry, blocks));
@@ -420,6 +467,19 @@ function parseCandidate(candidateRaw: string): ParseChatWebResponseResult {
       ? { response: parsed }
       : { response: null, error: "Parsed value was not an object." };
   } catch (error) {
+    const normalizedForDelimiterAndPath = normalizeLikelyWindowsPathEscapes(
+      normalizeMalformedFilePlaceholders(candidate),
+    );
+    if (normalizedForDelimiterAndPath !== candidate) {
+      try {
+        const normalized = JSON.parse(normalizedForDelimiterAndPath) as ChatWebResponseEnvelope;
+        if (normalized && typeof normalized === "object") {
+          return { response: normalized, repaired: true };
+        }
+      } catch {
+        // continue to other repair attempts
+      }
+    }
     try {
       const repaired = JSON.parse(fallbackJsonRepair(candidate)) as ChatWebResponseEnvelope;
       if (repaired && typeof repaired === "object") {
