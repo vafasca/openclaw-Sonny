@@ -5,6 +5,7 @@ import {
   buildChatWebAgentPrompt,
   createChatWebStreamFn,
   parseChatWebResponse,
+  parseChatWebResponseDetailed,
 } from "./chatweb-stream.js";
 
 describe("chatweb-stream", () => {
@@ -88,6 +89,20 @@ describe("chatweb-stream", () => {
       name: "write",
       arguments: { file_path: "a.txt" },
     });
+  });
+
+  it("repairs common unescaped quote JSON failures", () => {
+    const broken = `{
+      "role":"assistant",
+      "stopReason":"toolUse",
+      "content":[{"type":"toolCall","id":"call_1","name":"write","arguments":{"content":"<html lang="es">"}}]
+    }`;
+    const parsed = parseChatWebResponseDetailed(broken);
+
+    expect(parsed.response?.stopReason).toBe("toolUse");
+    const firstBlock = parsed.response?.content?.[0];
+    expect(firstBlock?.type).toBe("toolCall");
+    expect(firstBlock?.arguments).toEqual({ content: '<html lang="es">' });
   });
 
   it("emits toolUse when the browser assistant returns assistant content blocks", async () => {
@@ -214,6 +229,7 @@ describe("chatweb-stream", () => {
     expect(prompts[1]).toContain(
       "Convert that previous answer into exactly one valid JSON object only.",
     );
+    expect(prompts[1]).toContain("Parse error:");
     expect(message.stopReason).toBe("toolUse");
     expect(message.model).toBe("chatweb-browser");
     expect(message.provider).toBe("chatweb");

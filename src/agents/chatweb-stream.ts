@@ -33,6 +33,12 @@ type ChatWebResponseEnvelope = {
   }>;
 };
 
+type ParseChatWebResponseResult = {
+  response: ChatWebResponseEnvelope | null;
+  error?: string;
+  repaired?: boolean;
+};
+
 type ChatWebStreamDeps = {
   sendMessage?: typeof sendChatWebMessage;
   now?: () => number;
@@ -194,12 +200,21 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
     .join("\n\n");
 }
 
-function buildRepairPrompt(rawResponse: string): string {
+function buildRepairPrompt(rawResponse: string, parseError?: string): string {
+  const errorHint = parseError
+    ? [
+        `Parse error: ${parseError}`,
+        "Common cause: unescaped quotes inside JSON string values.",
+        'WRONG: "content":"<html lang="es">"',
+        'RIGHT:  "content":"<html lang=\\"es\\">"',
+      ].join("\n")
+    : "";
   return [
     "Your previous message was not machine-parseable.",
     "Convert that previous answer into exactly one valid JSON object only.",
     "Do not include markdown fences. Do not include explanations.",
     "Start with { and end with }.",
+    errorHint,
     "Allowed schema:",
     JSON.stringify(
       {
@@ -247,26 +262,85 @@ function extractJsonCandidate(raw: string): string | null {
   return null;
 }
 
-export function parseChatWebResponse(raw: string): ChatWebResponseEnvelope | null {
-  function parseCandidate(candidateRaw: string): ChatWebResponseEnvelope | null {
+function escapeLikelyUnescapedQuotes(candidate: string): string {
+  let result = "";
+  let insideString = false;
+  let escaped = false;
+
+  for (let i = 0; i < candidate.length; i += 1) {
+    const char = candidate[i];
+    if (char === "\\" && insideString && !escaped) {
+      escaped = true;
+      result += char;
+      continue;
+    }
+    if (char === '"' && !escaped) {
+      if (!insideString) {
+        insideString = true;
+        result += char;
+        continue;
+      }
+
+      let j = i + 1;
+      while (j < candidate.length && /\s/.test(candidate[j])) {
+        j += 1;
+      }
+      const next = candidate[j];
+      const canCloseString = next === "," || next === "}" || next === "]" || next === ":";
+      if (canCloseString) {
+        insideString = false;
+        result += char;
+      } else {
+        result += '\\"';
+      }
+      continue;
+    }
+
+    if (escaped) {
+      escaped = false;
+    }
+    result += char;
+  }
+
+  return result;
+}
+
+export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseResult {
+  function parseCandidate(candidateRaw: string): ParseChatWebResponseResult {
     const candidate = extractJsonCandidate(candidateRaw);
     if (!candidate) {
-      return null;
+      return { response: null, error: "No JSON object found in assistant response." };
     }
     try {
       const parsed = JSON.parse(candidate) as ChatWebResponseEnvelope;
-      return parsed && typeof parsed === "object" ? parsed : null;
-    } catch {
-      return null;
+      return parsed && typeof parsed === "object"
+        ? { response: parsed }
+        : { response: null, error: "Parsed value was not an object." };
+    } catch (error) {
+      const repairedCandidate = escapeLikelyUnescapedQuotes(candidate);
+      if (repairedCandidate !== candidate) {
+        try {
+          const repaired = JSON.parse(repairedCandidate) as ChatWebResponseEnvelope;
+          if (repaired && typeof repaired === "object") {
+            return { response: repaired, repaired: true };
+          }
+        } catch {
+          // fall through to original parse error
+        }
+      }
+      return {
+        response: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
   function unwrapNestedEnvelope(
     envelope: ChatWebResponseEnvelope,
     depth: number,
-  ): ChatWebResponseEnvelope {
+  ): ParseChatWebResponseResult {
     if (depth >= 2) {
-      return envelope;
+      return { response: envelope };
     }
     const content = envelope.content;
     if (
@@ -276,21 +350,30 @@ export function parseChatWebResponse(raw: string): ChatWebResponseEnvelope | nul
       typeof content[0].text === "string"
     ) {
       const nested = parseCandidate(content[0].text);
-      if (nested) {
-        return unwrapNestedEnvelope(nested, depth + 1);
+      if (nested.response) {
+        const unwrapped = unwrapNestedEnvelope(nested.response, depth + 1);
+        return { ...unwrapped, repaired: nested.repaired || unwrapped.repaired };
       }
     }
     if (typeof envelope.text === "string") {
       const nested = parseCandidate(envelope.text);
-      if (nested) {
-        return unwrapNestedEnvelope(nested, depth + 1);
+      if (nested.response) {
+        const unwrapped = unwrapNestedEnvelope(nested.response, depth + 1);
+        return { ...unwrapped, repaired: nested.repaired || unwrapped.repaired };
       }
     }
-    return envelope;
+    return { response: envelope };
   }
 
   const parsed = parseCandidate(raw);
-  return parsed ? unwrapNestedEnvelope(parsed, 0) : null;
+  if (!parsed.response) {
+    return parsed;
+  }
+  return unwrapNestedEnvelope(parsed.response, 0);
+}
+
+export function parseChatWebResponse(raw: string): ChatWebResponseEnvelope | null {
+  return parseChatWebResponseDetailed(raw).response;
 }
 
 function normalizeToolCalls(value: ChatWebResponseEnvelope["toolCalls"]): ToolCall[] {
@@ -386,10 +469,10 @@ export function createChatWebStreamFn(params: {
             browserType: params.browserType,
           })) ?? "";
         let rawResponse = firstRawResponse;
-        let parsed = parseChatWebResponse(rawResponse);
-        if (!parsed) {
+        let parsedResult = parseChatWebResponseDetailed(rawResponse);
+        if (!parsedResult.response) {
           const retryPrompt = firstRawResponse.trim()
-            ? buildRepairPrompt(firstRawResponse)
+            ? buildRepairPrompt(firstRawResponse, parsedResult.error)
             : buildEmptyRetryPrompt(prompt);
           const repairedRawResponse =
             (await sendMessage({
@@ -400,9 +483,10 @@ export function createChatWebStreamFn(params: {
             })) ?? "";
           if (repairedRawResponse.trim()) {
             rawResponse = repairedRawResponse;
-            parsed = parseChatWebResponse(repairedRawResponse);
+            parsedResult = parseChatWebResponseDetailed(repairedRawResponse);
           }
         }
+        const parsed = parsedResult.response;
         const message = makeChatWebAssistantMessage(now());
 
         if (!parsed) {
