@@ -296,9 +296,42 @@ function extractJsonCandidate(raw: string): string | null {
     return fencedMatch[1].trim();
   }
   const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return trimmed.slice(start, end + 1);
+  if (start < 0) {
+    return null;
+  }
+  let depth = 0;
+  let insideString = false;
+  let escaped = false;
+  for (let i = start; i < trimmed.length; i += 1) {
+    const char = trimmed[i];
+    if (insideString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        insideString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      insideString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return trimmed.slice(start, i + 1);
+      }
+    }
   }
   return null;
 }
@@ -399,6 +432,7 @@ function normalizeRawChatWebDialect(raw: string): string {
   return normalizeLikelyWindowsPathEscapes(
     raw
       .replace(/<FILE:([^\n>]+)\n>/g, "<<FILE:$1>>")
+      .replace(/<<FILE:([^\n>]+)\n>>/g, "<<FILE:$1>>")
       .replace(/<END_FILE:([^\n>]+)\n>/g, "<<END_FILE:$1>>"),
   );
 }

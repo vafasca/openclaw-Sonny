@@ -128,6 +128,35 @@ describe("chatweb-stream", () => {
     });
   });
 
+  it("extracts the root JSON only even when appended file blocks contain braces", () => {
+    const raw = `{
+      "role":"assistant",
+      "stopReason":"toolUse",
+      "content":[
+        {
+          "type":"toolCall",
+          "id":"call_js",
+          "name":"write",
+          "arguments":{"file_path":"F:\\\\workspace_sonny\\\\script.js","content":"<<FILE:script_js>>"}
+        }
+      ]
+    }
+
+<<FILE:script_js>>
+function run() {
+  console.log("ok");
+});
+<<END_FILE:script_js>>`;
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      file_path: "F:\\workspace_sonny\\script.js",
+      content: 'function run() {\n  console.log("ok");\n});',
+    });
+  });
+
   it("repairs malformed placeholder newlines and single-backslash windows paths", () => {
     const raw = `{
       "role":"assistant",
