@@ -440,12 +440,27 @@ function normalizeRawChatWebDialect(raw: string): string {
 }
 
 function sanitizeFileBlockContent(content: string): string {
-  return content.replace(/url\((['"])([^'")]*?)\n\1\)/g, "url($1$2$1)");
+  return content.replace(/url\((['"])([^'")]*?)\n\s*\1\)/g, "url($1$2$1)");
+}
+
+function sanitizeInlineArgumentValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeFileBlockContent(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeInlineArgumentValue(entry));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, sanitizeInlineArgumentValue(entry)]),
+    );
+  }
+  return value;
 }
 
 function extractFileBlocks(raw: string): FileBlockMap {
   const blocks: FileBlockMap = new Map();
-  const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)\n<<END_FILE:\1>>/g;
+  const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)<<END_FILE:\1>>/g;
   for (const match of raw.matchAll(regex)) {
     const id = match[1]?.trim();
     const content = match[2] ?? "";
@@ -628,7 +643,10 @@ function normalizeToolCalls(value: ChatWebResponseEnvelope["toolCalls"]): ToolCa
         type: "toolCall" as const,
         id,
         name,
-        arguments: args && typeof args === "object" && !Array.isArray(args) ? args : {},
+        arguments:
+          args && typeof args === "object" && !Array.isArray(args)
+            ? (sanitizeInlineArgumentValue(args) as Record<string, unknown>)
+            : {},
       };
     })
     .filter((entry): entry is ToolCall => Boolean(entry));
@@ -664,7 +682,7 @@ function normalizeContentBlocks(
         name,
         arguments:
           block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
-            ? block.arguments
+            ? (sanitizeInlineArgumentValue(block.arguments) as Record<string, unknown>)
             : {},
       });
     }

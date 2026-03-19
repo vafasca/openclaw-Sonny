@@ -128,6 +128,20 @@ describe("chatweb-stream", () => {
     });
   });
 
+  it("handles END_FILE on same line as last content line", () => {
+    const raw = `{"role":"assistant","stopReason":"toolUse","content":[{"type":"toolCall","id":"c1","name":"write","arguments":{"path":"a.html","content":"<<FILE:index_html>>"}}]}
+
+<<FILE:index_html>>
+<!DOCTYPE html><html lang="es"></html> <<END_FILE:index_html>>`;
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      path: "a.html",
+      content: '<!DOCTYPE html><html lang="es"></html>',
+    });
+  });
+
   it("extracts the root JSON only even when appended file blocks contain braces", () => {
     const raw = `{
       "role":"assistant",
@@ -207,6 +221,54 @@ body { background: url('https://i.imgur.com/5WQZ6Vn.png
     expect(toolCall?.arguments).toEqual({
       file_path: "F:\\workspace_sonny\\styles.css",
       content: "body { background: url('https://i.imgur.com/5WQZ6Vn.png'); }",
+    });
+  });
+
+  it("sanitizes css url() newlines when css is inline in tool arguments", async () => {
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async () =>
+          JSON.stringify({
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_css_inline",
+                name: "write",
+                arguments: {
+                  file_path: "F:\\\\workspace_sonny\\\\styles.css",
+                  content: "body { background: url('https://i.imgur.com/5WQZ6Vn.png\n'); }",
+                },
+              },
+            ],
+          }),
+      },
+    });
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+
+    const message = await streamFn(model, { messages: [] }).result();
+    expect(message.content).toContainEqual({
+      type: "toolCall",
+      id: "call_css_inline",
+      name: "write",
+      arguments: {
+        file_path: "F:\\\\workspace_sonny\\\\styles.css",
+        content: "body { background: url('https://i.imgur.com/5WQZ6Vn.png'); }",
+      },
     });
   });
 
