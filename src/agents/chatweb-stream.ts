@@ -157,12 +157,71 @@ function formatConversation(context: Context): string {
   );
 }
 
+const CHATWEB_ESSENTIAL_TOOLS = new Set(["write", "exec", "process", "read", "edit"]);
+const CHATWEB_HISTORY_MAX_TURNS = 4;
+const CHATWEB_HISTORY_CHAR_BUDGET = 4_000;
+
+function slimSystemPrompt(systemPrompt: string): string {
+  const trimmed = systemPrompt.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const workspaceLine = trimmed
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => /workspace/i.test(line));
+  return workspaceLine ? `Workspace context: ${workspaceLine}` : "";
+}
+
+function slimConversation(context: Context): string {
+  const messages = context.messages ?? [];
+  if (messages.length <= CHATWEB_HISTORY_MAX_TURNS) {
+    return formatConversation(context);
+  }
+  const recent = messages.slice(-CHATWEB_HISTORY_MAX_TURNS);
+  const older = messages.slice(0, -CHATWEB_HISTORY_MAX_TURNS);
+  const olderSummary = older
+    .map((message) => {
+      const content =
+        typeof message.content === "string"
+          ? message.content
+          : JSON.stringify(formatMessageContent(message));
+      return `${message.role}: ${content}`.trim();
+    })
+    .join(" | ")
+    .slice(0, CHATWEB_HISTORY_CHAR_BUDGET);
+  const payload = [
+    {
+      role: "system",
+      content: `Earlier context summary: ${olderSummary || "prior steps omitted for brevity"}`,
+    },
+    ...recent.map((message) => ({
+      role: message.role,
+      content: formatMessageContent(message),
+      ...(message.role === "toolResult"
+        ? {
+            toolName: message.toolName,
+            toolCallId: message.toolCallId,
+            isError: message.isError,
+          }
+        : {}),
+    })),
+  ];
+  return JSON.stringify(payload, null, 2);
+}
+
+function slimTools(tools: Context["tools"]): Array<Record<string, unknown>> {
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  return tools.filter((tool) => CHATWEB_ESSENTIAL_TOOLS.has(tool.name)).map(formatToolSchema);
+}
+
 export function buildChatWebAgentPrompt(params: { context: Context }): string {
   const systemPrompt = params.context.systemPrompt?.trim() ?? "";
-  const tools = Array.isArray(params.context.tools)
-    ? params.context.tools.map(formatToolSchema)
-    : [];
-  const conversation = formatConversation(params.context).trim();
+  const tools = slimTools(params.context.tools);
+  const conversation = slimConversation(params.context).trim();
+  const minimalSystemPrompt = slimSystemPrompt(systemPrompt);
 
   return [
     "This is an OpenClaw model turn being executed through a browser-backed assistant.",
@@ -209,8 +268,8 @@ export function buildChatWebAgentPrompt(params: { context: Context }): string {
     "<<END_FILE:index_html>>",
     "Do NOT put HTML/CSS/JS source directly inside JSON string content fields.",
     "The parser will replace placeholder content values with these file blocks.",
-    systemPrompt
-      ? `System message:\n${JSON.stringify({ role: "system", content: systemPrompt }, null, 2)}`
+    minimalSystemPrompt
+      ? `System message:\n${JSON.stringify({ role: "system", content: minimalSystemPrompt }, null, 2)}`
       : 'System message:\n{"role":"system","content":""}',
     `Messages:\n${conversation || "[]"}`,
     `Tools:\n${JSON.stringify(tools, null, 2)}`,
@@ -460,7 +519,7 @@ function sanitizeInlineArgumentValue(value: unknown): unknown {
 
 function extractFileBlocks(raw: string): FileBlockMap {
   const blocks: FileBlockMap = new Map();
-  const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)<<END_FILE:\1>>/g;
+  const regex = /(?:^|\n)\s*<<FILE:([a-zA-Z0-9_.-]+)>>\s*([\s\S]*?)<<END_FILE:\1>>/g;
   for (const match of raw.matchAll(regex)) {
     const id = match[1]?.trim();
     const content = match[2] ?? "";
@@ -685,6 +744,27 @@ function normalizeContentBlocks(
             ? (sanitizeInlineArgumentValue(block.arguments) as Record<string, unknown>)
             : {},
       });
+      continue;
+    }
+    // Some browser assistants return tool invocations as { type: "exec" | "process", name, arguments }
+    // instead of { type: "toolCall", ... }. Accept these blocks as tool calls when shape is clear.
+    if (block?.name && block.arguments !== undefined) {
+      const name = typeof block.name === "string" ? block.name.trim() : "";
+      if (!name) {
+        continue;
+      }
+      blocks.push({
+        type: "toolCall",
+        id:
+          typeof block.id === "string" && block.id.trim()
+            ? block.id.trim()
+            : `chatweb_call_${index + 1}`,
+        name,
+        arguments:
+          block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
+            ? (sanitizeInlineArgumentValue(block.arguments) as Record<string, unknown>)
+            : {},
+      });
     }
   }
   return blocks;
@@ -729,7 +809,8 @@ export function createChatWebStreamFn(params: {
     void (async () => {
       try {
         const prompt = buildChatWebAgentPrompt({ context });
-        const conversationId = options?.sessionId?.trim() || `${model.provider}:${model.id}`;
+        const baseConversationId = options?.sessionId?.trim() || `${model.provider}:${model.id}`;
+        const conversationId = `${baseConversationId}:run:${startedAt}:${Math.random().toString(36).slice(2, 8)}`;
         const firstRawResponse =
           (await sendMessage({
             conversationId,

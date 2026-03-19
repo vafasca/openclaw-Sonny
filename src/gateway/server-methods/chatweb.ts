@@ -16,7 +16,7 @@ type LiveSession = {
   page: Page;
   aiAssistant: ChatWebAssistant;
   browserType: ChatWebBrowser;
-  chatId: string | null;
+  activeConversationId: string | null;
 };
 
 const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
@@ -81,11 +81,11 @@ function looksLoggedIn(storagePath: string): boolean {
 }
 
 async function ensureSession(params: {
-  conversationId: string;
   browserType: ChatWebBrowser;
   aiAssistant: ChatWebAssistant;
 }): Promise<LiveSession> {
-  const existing = activeSessions.get(params.conversationId);
+  const sessionKey = `${params.aiAssistant}-${params.browserType}`;
+  const existing = activeSessions.get(sessionKey);
   if (existing && existing.browser.isConnected()) {
     return existing;
   }
@@ -108,16 +108,16 @@ async function ensureSession(params: {
     timeout: 60_000,
   });
   await page.waitForTimeout(1_500);
-  const next: LiveSession = {
+  const session: LiveSession = {
     browser,
     context,
     page,
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
-    chatId: null,
+    activeConversationId: null,
   };
-  activeSessions.set(params.conversationId, next);
-  return next;
+  activeSessions.set(sessionKey, session);
+  return session;
 }
 
 async function extractAssistantReply(
@@ -300,12 +300,15 @@ export async function sendChatWebMessage(params: {
     );
   }
   const session = await ensureSession({
-    conversationId: params.conversationId,
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
   });
 
-  const response = await sendViaChatWeb({ session, message: params.message });
+  const response = await sendViaChatWeb({
+    session,
+    message: params.message,
+    conversationId: params.conversationId,
+  });
   if (debugEnabled) {
     if (!response?.trim()) {
       const snapshot = await captureAssistantDebugSnapshot(session.page, params.aiAssistant);
@@ -317,13 +320,23 @@ export async function sendChatWebMessage(params: {
       `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
     );
   }
+  await session.context.storageState({ path: getStoragePath(params.aiAssistant) }).catch(() => {});
   return response;
 }
 
 async function sendViaChatWeb(params: {
   session: LiveSession;
   message: string;
+  conversationId: string;
 }): Promise<string | null> {
+  if (params.session.activeConversationId !== params.conversationId) {
+    await params.session.page.goto(ASSISTANT_URLS[params.session.aiAssistant], {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    });
+    await params.session.page.waitForTimeout(900);
+    params.session.activeConversationId = params.conversationId;
+  }
   const inputSelectors =
     params.session.aiAssistant === "chatgpt"
       ? ["#prompt-textarea", 'textarea[placeholder*="Message"]', 'div[contenteditable="true"]']
@@ -364,8 +377,6 @@ async function sendViaChatWeb(params: {
     params.session.aiAssistant,
     previousAssistantCount,
   );
-  const storagePath = getStoragePath(params.session.aiAssistant);
-  await params.session.context.storageState({ path: storagePath });
   return response;
 }
 

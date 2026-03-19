@@ -24,8 +24,7 @@ describe("chatweb-stream", () => {
       },
     });
 
-    expect(prompt).toContain('"role": "system"');
-    expect(prompt).toContain("You are OpenClaw.");
+    expect(prompt).toContain('System message:\n{"role":"system","content":""}');
     expect(prompt).toContain('"name": "write"');
     expect(prompt).toContain('"role": "user"');
     expect(prompt).toContain('"hola"');
@@ -49,7 +48,7 @@ describe("chatweb-stream", () => {
       },
     });
 
-    expect(prompt).toContain("SYSTEM_FULL");
+    expect(prompt).not.toContain("SYSTEM_FULL");
     expect(prompt).toContain("mensaje completo");
     expect(prompt).toContain('"file_path"');
     expect(prompt).toContain('"description": "absolute path"');
@@ -62,6 +61,34 @@ describe("chatweb-stream", () => {
     expect(prompt).toContain('{"content":"<<FILE:index_html>>"}');
     expect(prompt).toContain("escape backslashes (example: F:\\\\workspace_sonny\\\\index.html)");
     expect(prompt).toContain("<<FILE:index_html>>");
+  });
+
+  it("builds a slim prompt with essential tools and condensed history", () => {
+    const prompt = buildChatWebAgentPrompt({
+      context: {
+        systemPrompt: "General system instructions\nWorkspace: /tmp/demo-workspace\nOther notes",
+        messages: [
+          { role: "user", content: "turn 1", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "turn 2" }], timestamp: 2 },
+          { role: "user", content: "turn 3", timestamp: 3 },
+          { role: "assistant", content: [{ type: "text", text: "turn 4" }], timestamp: 4 },
+          { role: "user", content: "turn 5", timestamp: 5 },
+          { role: "assistant", content: [{ type: "text", text: "turn 6" }], timestamp: 6 },
+        ],
+        tools: [
+          { name: "write", description: "Write file", parameters: Type.Object({}) },
+          { name: "search", description: "Search web", parameters: Type.Object({}) },
+          { name: "process", description: "Process manager", parameters: Type.Object({}) },
+        ],
+      },
+    });
+
+    expect(prompt).toContain("Workspace context:");
+    expect(prompt).toContain("/tmp/demo-workspace");
+    expect(prompt).toContain('"name": "write"');
+    expect(prompt).toContain('"name": "process"');
+    expect(prompt).not.toContain('"name": "search"');
+    expect(prompt).toContain("Earlier context summary:");
   });
 
   it("parses fenced JSON responses", () => {
@@ -139,6 +166,18 @@ describe("chatweb-stream", () => {
     expect(toolCall?.arguments).toEqual({
       path: "a.html",
       content: '<!DOCTYPE html><html lang="es"></html>',
+    });
+  });
+
+  it("extracts file blocks when END_FILE follows content without a newline", () => {
+    const raw =
+      '{"role":"assistant","stopReason":"toolUse","content":[{"type":"toolCall","id":"c1","name":"write","arguments":{"path":"one-line.html","content":"<<FILE:index_html>>"}}]}\n\n<<FILE:index_html>><h1>hola</h1><<END_FILE:index_html>>';
+    const parsed = parseChatWebResponseDetailed(raw);
+    const toolCall = parsed.response?.content?.[0];
+    expect(toolCall?.type).toBe("toolCall");
+    expect(toolCall?.arguments).toEqual({
+      path: "one-line.html",
+      content: "<h1>hola</h1>",
     });
   });
 
@@ -364,6 +403,95 @@ body { background: url('https://i.imgur.com/5WQZ6Vn.png
       name: "write",
       arguments: { file_path: "a.txt" },
     });
+  });
+
+  it("normalizes tool-like blocks that use non-toolCall type names", async () => {
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async () =>
+          JSON.stringify({
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              { type: "thinking", thinking: "polling process..." },
+              {
+                type: "process",
+                id: "poll_angular_creation",
+                name: "process",
+                arguments: { action: "poll", sessionId: "create_angular_project", timeout: 60000 },
+              },
+            ],
+          }),
+        now: () => 123,
+      },
+    });
+
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+    const context: Context = {
+      messages: [{ role: "user", content: "sigue creando el proyecto", timestamp: 1 }],
+    };
+
+    const message = await streamFn(model, context).result();
+
+    expect(message.stopReason).toBe("toolUse");
+    expect(message.content).toContainEqual({
+      type: "toolCall",
+      id: "poll_angular_creation",
+      name: "process",
+      arguments: { action: "poll", sessionId: "create_angular_project", timeout: 60000 },
+    });
+  });
+
+  it("uses a unique chatweb conversation id per run", async () => {
+    const conversationIds: string[] = [];
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async ({ conversationId }) => {
+          conversationIds.push(conversationId);
+          return JSON.stringify({
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "ok" }],
+          });
+        },
+      },
+    });
+
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+
+    await streamFn(model, { messages: [] }, { sessionId: "agent:main:main" }).result();
+    await streamFn(model, { messages: [] }, { sessionId: "agent:main:main" }).result();
+
+    expect(conversationIds).toHaveLength(2);
+    expect(conversationIds[0]).not.toEqual(conversationIds[1]);
+    expect(conversationIds[0]).toContain("agent:main:main:run:");
+    expect(conversationIds[1]).toContain("agent:main:main:run:");
   });
 
   it("falls back to plain text when the browser assistant returns non-JSON text", async () => {
