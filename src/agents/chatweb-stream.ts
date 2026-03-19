@@ -685,6 +685,27 @@ function normalizeContentBlocks(
             ? (sanitizeInlineArgumentValue(block.arguments) as Record<string, unknown>)
             : {},
       });
+      continue;
+    }
+    // Some browser assistants return tool invocations as { type: "exec" | "process", name, arguments }
+    // instead of { type: "toolCall", ... }. Accept these blocks as tool calls when shape is clear.
+    if (block?.name && block.arguments !== undefined) {
+      const name = typeof block.name === "string" ? block.name.trim() : "";
+      if (!name) {
+        continue;
+      }
+      blocks.push({
+        type: "toolCall",
+        id:
+          typeof block.id === "string" && block.id.trim()
+            ? block.id.trim()
+            : `chatweb_call_${index + 1}`,
+        name,
+        arguments:
+          block.arguments && typeof block.arguments === "object" && !Array.isArray(block.arguments)
+            ? (sanitizeInlineArgumentValue(block.arguments) as Record<string, unknown>)
+            : {},
+      });
     }
   }
   return blocks;

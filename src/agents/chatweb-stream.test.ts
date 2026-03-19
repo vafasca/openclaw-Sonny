@@ -366,6 +366,56 @@ body { background: url('https://i.imgur.com/5WQZ6Vn.png
     });
   });
 
+  it("normalizes tool-like blocks that use non-toolCall type names", async () => {
+    const streamFn = createChatWebStreamFn({
+      aiAssistant: "chatgpt",
+      browserType: "chrome",
+      deps: {
+        sendMessage: async () =>
+          JSON.stringify({
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              { type: "thinking", thinking: "polling process..." },
+              {
+                type: "process",
+                id: "poll_angular_creation",
+                name: "process",
+                arguments: { action: "poll", sessionId: "create_angular_project", timeout: 60000 },
+              },
+            ],
+          }),
+        now: () => 123,
+      },
+    });
+
+    const model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://example.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+    } satisfies Model<"openai-completions">;
+    const context: Context = {
+      messages: [{ role: "user", content: "sigue creando el proyecto", timestamp: 1 }],
+    };
+
+    const message = await streamFn(model, context).result();
+
+    expect(message.stopReason).toBe("toolUse");
+    expect(message.content).toContainEqual({
+      type: "toolCall",
+      id: "poll_angular_creation",
+      name: "process",
+      arguments: { action: "poll", sessionId: "create_angular_project", timeout: 60000 },
+    });
+  });
+
   it("falls back to plain text when the browser assistant returns non-JSON text", async () => {
     const streamFn = createChatWebStreamFn({
       aiAssistant: "chatgpt",
