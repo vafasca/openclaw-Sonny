@@ -372,15 +372,14 @@ function normalizeLikelyWindowsPathEscapes(candidate: string): string {
       result += char;
       continue;
     }
-    if (insideString && char === "\\") {
+    if (insideString && char === "\\" && !escaped) {
       const next = candidate[i + 1] ?? "";
       const validEscape = ['"', "\\", "/", "b", "f", "n", "r", "t", "u"].includes(next);
       if (!validEscape) {
         result += "\\\\";
-        escaped = false;
         continue;
       }
-      escaped = !escaped;
+      escaped = true;
       result += char;
       continue;
     }
@@ -396,9 +395,17 @@ function normalizePlaceholderToken(value: string): string {
   return value.replace(/\s+/g, "").replace(/^<+FILE:([a-zA-Z0-9_.-]+)>+$/i, "<<FILE:$1>>");
 }
 
+function normalizeRawChatWebDialect(raw: string): string {
+  return normalizeLikelyWindowsPathEscapes(
+    raw
+      .replace(/<FILE:([^\n>]+)\n>/g, "<<FILE:$1>>")
+      .replace(/<END_FILE:([^\n>]+)\n>/g, "<<END_FILE:$1>>"),
+  );
+}
+
 function extractFileBlocks(raw: string): FileBlockMap {
   const blocks: FileBlockMap = new Map();
-  const regex = /<<FILE:([a-zA-Z0-9_.-]+)>>\s*\n([\s\S]*?)\n<<END_FILE:\1>>/g;
+  const regex = /<{1,2}FILE:([a-zA-Z0-9_.-]+)>{1,2}\s*\n([\s\S]*?)\n<{1,2}END_FILE:\1>{1,2}/g;
   for (const match of raw.matchAll(regex)) {
     const id = match[1]?.trim();
     const content = match[2] ?? "";
@@ -507,6 +514,8 @@ function parseCandidate(candidateRaw: string): ParseChatWebResponseResult {
 }
 
 export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseResult {
+  const normalizedRaw = normalizeRawChatWebDialect(raw);
+
   function unwrapNestedEnvelope(
     envelope: ChatWebResponseEnvelope,
     depth: number,
@@ -537,7 +546,7 @@ export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseR
     return { response: envelope };
   }
 
-  const parsed = parseCandidate(raw);
+  const parsed = parseCandidate(normalizedRaw);
   if (!parsed.response) {
     return parsed;
   }
@@ -547,7 +556,7 @@ export function parseChatWebResponseDetailed(raw: string): ParseChatWebResponseR
   }
   return {
     ...unwrapped,
-    response: applyFileBlocksToEnvelope(unwrapped.response, extractFileBlocks(raw)),
+    response: applyFileBlocksToEnvelope(unwrapped.response, extractFileBlocks(normalizedRaw)),
   };
 }
 

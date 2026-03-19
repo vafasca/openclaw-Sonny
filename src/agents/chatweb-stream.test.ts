@@ -112,12 +112,12 @@ describe("chatweb-stream", () => {
       ]
     }
 
-<<FILE:index_html>>
+<FILE:index_html>
 <!DOCTYPE html>
 <html lang="es">
   <body>ok</body>
 </html>
-<<END_FILE:index_html>>`;
+<END_FILE:index_html>`;
     const parsed = parseChatWebResponseDetailed(raw);
     const toolCall = parsed.response?.content?.[0];
 
