@@ -16,7 +16,6 @@ type LiveSession = {
   page: Page;
   aiAssistant: ChatWebAssistant;
   browserType: ChatWebBrowser;
-  chatId: string | null;
 };
 
 const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
@@ -25,7 +24,6 @@ const ASSISTANT_URLS: Record<ChatWebAssistant, string> = {
 };
 
 const activeLoginSessions = new Map<string, { browser: Browser; context: BrowserContext }>();
-const activeSessions = new Map<string, LiveSession>();
 
 const logChatWeb = createSubsystemLogger("gateway/chatweb");
 const CHATWEB_DEBUG_ENV_KEYS = ["OPENCLAW_DEBUG_MODEL_IO", "OPENCLAW_DEBUG_PROMPT_IO"] as const;
@@ -80,15 +78,10 @@ function looksLoggedIn(storagePath: string): boolean {
   }
 }
 
-async function ensureSession(params: {
-  conversationId: string;
+async function createSession(params: {
   browserType: ChatWebBrowser;
   aiAssistant: ChatWebAssistant;
 }): Promise<LiveSession> {
-  const existing = activeSessions.get(params.conversationId);
-  if (existing && existing.browser.isConnected()) {
-    return existing;
-  }
   const storagePath = getStoragePath(params.aiAssistant);
   if (!fs.existsSync(storagePath)) {
     throw new Error("No saved login session. Start chatweb.login.start first.");
@@ -108,16 +101,13 @@ async function ensureSession(params: {
     timeout: 60_000,
   });
   await page.waitForTimeout(1_500);
-  const next: LiveSession = {
+  return {
     browser,
     context,
     page,
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
-    chatId: null,
   };
-  activeSessions.set(params.conversationId, next);
-  return next;
 }
 
 async function extractAssistantReply(
@@ -299,25 +289,31 @@ export async function sendChatWebMessage(params: {
       `[model-io] request mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} prompt=${trimChatWebDebugText(params.message)}`,
     );
   }
-  const session = await ensureSession({
-    conversationId: params.conversationId,
+  const session = await createSession({
     aiAssistant: params.aiAssistant,
     browserType: params.browserType,
   });
 
-  const response = await sendViaChatWeb({ session, message: params.message });
-  if (debugEnabled) {
-    if (!response?.trim()) {
-      const snapshot = await captureAssistantDebugSnapshot(session.page, params.aiAssistant);
+  try {
+    const response = await sendViaChatWeb({ session, message: params.message });
+    if (debugEnabled) {
+      if (!response?.trim()) {
+        const snapshot = await captureAssistantDebugSnapshot(session.page, params.aiAssistant);
+        logChatWeb.info(
+          `[model-io] empty-response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} snapshot=${trimChatWebDebugText(snapshot)}`,
+        );
+      }
       logChatWeb.info(
-        `[model-io] empty-response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} snapshot=${trimChatWebDebugText(snapshot)}`,
+        `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
       );
     }
-    logChatWeb.info(
-      `[model-io] response mode=chatweb conversationId=${params.conversationId} assistant=${params.aiAssistant} browser=${params.browserType} response=${trimChatWebDebugText((response ?? "").trim() || "<empty>")}`,
-    );
+    return response;
+  } finally {
+    await session.context
+      .storageState({ path: getStoragePath(params.aiAssistant) })
+      .catch(() => {});
+    await session.browser.close().catch(() => {});
   }
-  return response;
 }
 
 async function sendViaChatWeb(params: {
@@ -364,8 +360,6 @@ async function sendViaChatWeb(params: {
     params.session.aiAssistant,
     previousAssistantCount,
   );
-  const storagePath = getStoragePath(params.session.aiAssistant);
-  await params.session.context.storageState({ path: storagePath });
   return response;
 }
 
